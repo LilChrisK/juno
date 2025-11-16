@@ -2,6 +2,23 @@
 
 This implementation uses NASA's SPICE toolkit to correct geometric distortions in JunoCam pushframe images caused by spacecraft motion.
 
+## IMPORTANT: Filename Format Discovery
+
+JunoCam filenames follow the format: **JNCT_YYYYDDD_OOFNNNNN_VXX**
+
+Example: `JNCE_2021159_34C00080_V01-raw.png`
+- **JNC**: JunoCam
+- **E**: EDR (Experiment Data Record)
+- **2021159**: Year 2021, day 159
+- **34**: Orbit number (Perijove 34)
+- **C**: Filter combination specifier
+- **00080**: Image index 80
+- **V01**: Version 01
+
+**The hex-looking ID (34C00080) is NOT a spacecraft clock value!** It's a structured identifier combining orbit number + filter + image index.
+
+The actual spacecraft clock (SCLK) is in the **metadata JSON file** under `SPACECRAFT_CLOCK_START_COUNT`.
+
 ## How It Works
 
 JunoCam captures images using a pushframe technique where each frame consists of 3 separate exposures through different color filters (Blue, Green, Red). Between each filter exposure, the spacecraft moves, causing the three color channels to be misaligned.
@@ -58,6 +75,8 @@ self.kernel_dir / "ck" / "juno_rec_220101_220401_v01.bc",
 
 ## Usage
 
+**IMPORTANT**: You need both the image file AND its metadata JSON file for SPICE correction.
+
 ### Basic Usage
 
 ```bash
@@ -66,10 +85,11 @@ python main_with_spice.py
 
 This will:
 1. Load SPICE kernels
-2. Parse the image timestamp
-3. Calculate per-frame geometric corrections
-4. Apply corrections to each color channel
-5. Save corrected images to `images/processed/`
+2. Load image and find corresponding metadata JSON
+3. Extract SPACECRAFT_CLOCK_START_COUNT from metadata
+4. Calculate per-frame geometric corrections using SPICE
+5. Apply corrections to each color channel
+6. Save corrected images to `images/processed/`
 
 ### Advanced Usage
 
