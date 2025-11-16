@@ -30,6 +30,83 @@ def plot_sphere(ax, radius, center=(0, 0, 0), color='orange', alpha=0.3, label='
     ax.plot_surface(x, y, z, color=color, alpha=alpha, label=label)
 
 
+def ray_sphere_intersection(ray_origin, ray_direction, sphere_center, sphere_radius):
+    """
+    Calculate ray-sphere intersection point.
+
+    Args:
+        ray_origin: Starting point of ray (3D vector)
+        ray_direction: Direction of ray (normalized 3D vector)
+        sphere_center: Center of sphere (3D vector)
+        sphere_radius: Radius of sphere (scalar)
+
+    Returns:
+        Intersection point (3D vector) or None if no intersection
+    """
+    # Vector from sphere center to ray origin
+    oc = ray_origin - sphere_center
+
+    # Quadratic equation coefficients: at² + bt + c = 0
+    # Ray: P(t) = origin + t * direction
+    # Sphere: |P - center|² = radius²
+    a = np.dot(ray_direction, ray_direction)
+    b = 2.0 * np.dot(oc, ray_direction)
+    c = np.dot(oc, oc) - sphere_radius * sphere_radius
+
+    discriminant = b*b - 4*a*c
+
+    # No intersection
+    if discriminant < 0:
+        return None
+
+    # Calculate the two possible t values
+    sqrt_disc = np.sqrt(discriminant)
+    t1 = (-b - sqrt_disc) / (2.0 * a)
+    t2 = (-b + sqrt_disc) / (2.0 * a)
+
+    # We want the first positive intersection (closest to origin)
+    t = None
+    if t1 > 0:
+        t = t1
+    elif t2 > 0:
+        t = t2
+
+    if t is None:
+        return None
+
+    # Calculate intersection point
+    intersection = ray_origin + t * ray_direction
+    return intersection
+
+
+def plot_fov_edge_intersection(ax, pos, corner1, corner2, sphere_center, sphere_radius, num_samples=50, color='lime', linewidth=2):
+    """
+    Plot the intersection curve between a FOV edge plane and Jupiter's surface.
+
+    Samples points along the edge between two corners and projects them onto Jupiter.
+    """
+    edge_points = []
+
+    # Sample points along the edge from corner1 to corner2
+    for alpha in np.linspace(0, 1, num_samples):
+        # Interpolate between corners (spherical interpolation would be more accurate, but linear is simpler)
+        direction = (1 - alpha) * corner1 + alpha * corner2
+        direction = direction / np.linalg.norm(direction)  # Normalize
+
+        # Find intersection with Jupiter
+        intersection = ray_sphere_intersection(pos, direction, sphere_center, sphere_radius)
+        if intersection is not None:
+            edge_points.append(intersection)
+
+    # Draw the curve if we have points
+    if len(edge_points) > 1:
+        edge_points = np.array(edge_points)
+        ax.plot(edge_points[:, 0], edge_points[:, 1], edge_points[:, 2],
+                color=color, linewidth=linewidth, alpha=0.9)
+        return True
+    return False
+
+
 def plot_frame_geometry(ax, et, frame_num, junocam_img, jupiter_radius):
     """Plot geometry for a single frame."""
     # Get spacecraft state (position and velocity)
@@ -105,32 +182,85 @@ def plot_frame_geometry(ax, et, frame_num, junocam_img, jupiter_radius):
 
     # Plot camera FOV
     if has_pointing:
+        sphere_center = np.array([0.0, 0.0, 0.0])
+
+        # Calculate boresight intersection with Jupiter
+        boresight_intersection = ray_sphere_intersection(
+            pos, camera_boresight_j2000, sphere_center, jupiter_radius
+        )
+
         # Plot boresight (center line)
-        boresight_end = pos + camera_boresight_j2000 * fov_scale
-        ax.plot([pos[0], boresight_end[0]],
-               [pos[1], boresight_end[1]],
-               [pos[2], boresight_end[2]],
-               'r-', linewidth=2, label='Camera boresight', alpha=0.8)
+        if boresight_intersection is not None:
+            # Ray hits Jupiter - draw to intersection point
+            ax.plot([pos[0], boresight_intersection[0]],
+                   [pos[1], boresight_intersection[1]],
+                   [pos[2], boresight_intersection[2]],
+                   'r-', linewidth=2, label='Camera boresight', alpha=0.8)
+            # Highlight intersection on sphere
+            ax.scatter(boresight_intersection[0],
+                      boresight_intersection[1],
+                      boresight_intersection[2],
+                      c='red', s=200, marker='*', edgecolors='white', linewidths=2,
+                      label='Boresight on Jupiter', zorder=10)
+            print(f"  ✓ Boresight hits Jupiter at: [{boresight_intersection[0]:.1f}, {boresight_intersection[1]:.1f}, {boresight_intersection[2]:.1f}]")
+        else:
+            # Ray misses - draw extended line
+            boresight_end = pos + camera_boresight_j2000 * fov_scale
+            ax.plot([pos[0], boresight_end[0]],
+                   [pos[1], boresight_end[1]],
+                   [pos[2], boresight_end[2]],
+                   'r--', linewidth=2, label='Camera boresight (miss)', alpha=0.5)
+            print(f"  ✗ Boresight misses Jupiter")
 
-        # Plot FOV corner vectors
+        # Plot FOV corner vectors and intersections
         colors = ['red', 'yellow', 'cyan', 'magenta']
-        for i, (corner, color) in enumerate(zip(fov_corners_j2000, colors)):
-            corner_end = pos + corner * fov_scale
-            ax.plot([pos[0], corner_end[0]],
-                   [pos[1], corner_end[1]],
-                   [pos[2], corner_end[2]],
-                   color=color, linewidth=1.5, alpha=0.7,
-                   label=f'FOV corner {i+1}' if i == 0 else '')
+        intersection_points = []
 
-        # Connect the corners to show the FOV boundary
-        for i in range(len(fov_corners_j2000)):
-            j = (i + 1) % len(fov_corners_j2000)
-            corner_i_end = pos + fov_corners_j2000[i] * fov_scale
-            corner_j_end = pos + fov_corners_j2000[j] * fov_scale
-            ax.plot([corner_i_end[0], corner_j_end[0]],
-                   [corner_i_end[1], corner_j_end[1]],
-                   [corner_i_end[2], corner_j_end[2]],
-                   'r--', linewidth=1, alpha=0.4)
+        for i, (corner, color) in enumerate(zip(fov_corners_j2000, colors)):
+            # Calculate intersection
+            corner_intersection = ray_sphere_intersection(
+                pos, corner, sphere_center, jupiter_radius
+            )
+
+            if corner_intersection is not None:
+                # Ray hits Jupiter
+                ax.plot([pos[0], corner_intersection[0]],
+                       [pos[1], corner_intersection[1]],
+                       [pos[2], corner_intersection[2]],
+                       color=color, linewidth=1.5, alpha=0.7)
+                # Highlight on sphere
+                ax.scatter(corner_intersection[0],
+                          corner_intersection[1],
+                          corner_intersection[2],
+                          c=color, s=150, marker='o', edgecolors='white', linewidths=1.5,
+                          zorder=10)
+                intersection_points.append(corner_intersection)
+            else:
+                # Ray misses - draw extended line
+                corner_end = pos + corner * fov_scale
+                ax.plot([pos[0], corner_end[0]],
+                       [pos[1], corner_end[1]],
+                       [pos[2], corner_end[2]],
+                       color=color, linewidth=1.5, alpha=0.3, linestyle='--')
+
+        # Draw FOV edge intersection curves on Jupiter's surface
+        if len(fov_corners_j2000) >= 4:
+            edge_count = 0
+            for i in range(len(fov_corners_j2000)):
+                j = (i + 1) % len(fov_corners_j2000)
+                # Draw the intersection curve for this edge
+                has_edge = plot_fov_edge_intersection(
+                    ax, pos, fov_corners_j2000[i], fov_corners_j2000[j],
+                    sphere_center, jupiter_radius, num_samples=50,
+                    color='lime', linewidth=3
+                )
+                if has_edge:
+                    edge_count += 1
+
+            if edge_count > 0:
+                print(f"  ✓ FOV footprint: {edge_count} edges on Jupiter surface")
+                # Add a dummy line for the legend
+                ax.plot([], [], 'lime', linewidth=3, alpha=0.9, label='FOV footprint')
 
     # Plot trajectory from spacecraft to Jupiter center
     ax.plot([0, pos[0]], [0, pos[1]], [0, pos[2]],
@@ -215,8 +345,13 @@ def main():
         # Jupiter radius (equatorial)
         jupiter_radius = 71492  # km
 
+        # Create output directory
+        output_dir = Path("images/processed/geo")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"\nOutput directory: {output_dir}")
+
         print("\n" + "=" * 70)
-        print("Close each plot window to see the next frame")
+        print("Generating geometry visualizations (no display)")
         print("Press Ctrl+C to stop")
         print("=" * 70)
 
@@ -235,14 +370,11 @@ def main():
             plt.tight_layout()
 
             # Save frame
-            output_file = f"images/processed/geometry_frame_{frame_num:02d}.png"
+            output_file = output_dir / f"geometry_frame_{frame_num:02d}.png"
             plt.savefig(output_file, dpi=150, bbox_inches='tight')
             print(f"  Saved: {output_file}")
 
-            # Show plot (blocks until window is closed)
-            plt.show()
-
-            # Close the figure to free memory
+            # Close the figure to free memory (no display)
             plt.close(fig)
 
         print("\n✓ All frames visualized!")
