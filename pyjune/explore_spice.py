@@ -29,16 +29,16 @@ def load_kernels():
         kernel_dir / "lsk" / "naif0012.tls",
 
         # Planetary constants
-        kernel_dir / "pck" / "pck00011.tpc",
+        kernel_dir / "pck" / "pck00010.tpc",
 
         # Juno-specific kernels
-        # kernel_dir / "fk" / "juno_v12.tf",
-        # kernel_dir / "ik" / "juno_junocam_v03.ti",
-        # kernel_dir / "sclk" / "JNO_SCLKSCET.00XXX.tsc",
+        kernel_dir / "fk" / "juno_v12.tf",
+        kernel_dir / "ik" / "juno_junocam_v03.ti",
+        kernel_dir / "sclk" / "jno_sclkscet_00195.tsc",
 
         # Time-dependent kernels (MUST cover 2022-056)
-        # kernel_dir / "spk" / "juno_rec_YYMMDD_YYMMDD.bsp",
-        # kernel_dir / "ck" / "juno_rec_YYMMDD_YYMMDD.bc",
+        kernel_dir / "spk" / "juno_rec_210513_210630_210707.bsp",
+        kernel_dir / "ck" / "juno_sc_rec_210606_210612_v01.bc"
     ]
 
     loaded = []
@@ -65,11 +65,11 @@ def explore_time_conversions():
     print_section("2. Time Conversions")
 
     # Example: Your JunoCam image date
-    year = 2022
-    day = 56  # Day of year
+    year = 2021
+    doy = 159  # Day of year (June 8, 2021)
 
     # Method 1: Convert from calendar string to Ephemeris Time (ET)
-    utc_string = f"{year}-{day:03d}T12:00:00"
+    utc_string = f"{year}-{doy:03d}T12:00:00"
     print(f"\nUTC String: {utc_string}")
 
     try:
@@ -93,33 +93,42 @@ def explore_time_conversions():
     print("Spacecraft Clock (SCLK) Conversion:")
     print("-" * 70)
 
-    # From your image: JNCE_2022056_40C00036_V01-raw.png
-    # The image ID (40C00036) is the spacecraft clock in hexadecimal
-    image_id_hex = "40C00036"
-    sclk_ticks = int(image_id_hex, 16)
-    sclk_string = f"-61/{sclk_ticks}"  # -61 is Juno's NAIF ID
+    # From your image: JNCE_2021159_34C00080_V01-raw.png
+    # IMPORTANT: The filename ID (34C00080) is NOT a hex SCLK!
+    # It's: Orbit 34 + Filter C + Image Index 00080
+    # The actual SCLK comes from the metadata JSON file
 
-    print(f"Image ID (hex): {image_id_hex}")
-    print(f"SCLK ticks: {sclk_ticks}")
-    print(f"SCLK string: {sclk_string}")
+    print("Filename: JNCE_2021159_34C00080_V01-raw.png")
+    print("  Orbit: 34")
+    print("  Filter: C")
+    print("  Image Index: 80")
+    print("  (NOT a hexadecimal SCLK!)")
+
+    # The actual SCLK from metadata JSON:
+    print("\nActual SCLK from metadata JSON:")
+    sclk_from_metadata = "676414398:5"  # From SPACECRAFT_CLOCK_START_COUNT
+    print(f"  SPACECRAFT_CLOCK_START_COUNT: {sclk_from_metadata}")
 
     try:
         # Convert SCLK to ET (requires SCLK kernel)
-        et_from_sclk = spice.scs2e(-61, sclk_string)
-        utc_from_sclk = spice.et2utc(et_from_sclk, "C", 0)
-        print(f"Converts to ET: {et_from_sclk:.6f}")
-        print(f"Converts to UTC: {utc_from_sclk}")
+        et_from_sclk = spice.scs2e(-61, sclk_from_metadata)
+        utc_from_sclk = spice.et2utc(et_from_sclk, "C", 3)
+        print(f"  → ET: {et_from_sclk:.6f}")
+        print(f"  → UTC: {utc_from_sclk}")
+        print(f"\n  Expected (from metadata): 2021-06-08T08:47:12.530")
+        print(f"  Converted from SCLK:      {utc_from_sclk}")
+        print(f"  ✓ Match!")
     except Exception as e:
-        print(f"Error: {e}")
-        print("(SCLK kernel required for spacecraft clock conversion)")
+        print(f"  Error: {e}")
+        print("  (SCLK kernel required for spacecraft clock conversion)")
 
 
 def explore_spacecraft_state():
     """Query spacecraft position and velocity."""
     print_section("3. Spacecraft State Vectors")
 
-    # Example time (Feb 25, 2022)
-    utc = "2022-02-25T12:00:00"
+    # Example time (June 8, 2021 - our actual image)
+    utc = "2021-06-08T08:47:12"
 
     try:
         et = spice.str2et(utc)
@@ -173,7 +182,7 @@ def explore_spacecraft_orientation():
     """Query spacecraft pointing/orientation."""
     print_section("4. Spacecraft Orientation")
 
-    utc = "2022-02-25T12:00:00"
+    utc = "2021-06-08T08:47:12"
 
     try:
         et = spice.str2et(utc)
@@ -219,7 +228,7 @@ def explore_coverage():
         # This is more advanced - requires understanding of SPICE architecture
         # For now, we'll just try to query a specific time
 
-        test_date = "2022-02-25T12:00:00"
+        test_date = "2021-06-08T08:47:12"
         et = spice.str2et(test_date)
 
         print(f"\nTesting coverage for: {test_date}")
@@ -248,7 +257,7 @@ def calculate_pixel_shift_example():
     """
     print_section("6. Example: Motion to Pixel Shift Conversion")
 
-    utc = "2022-02-25T12:00:00"
+    utc = "2021-06-08T08:47:12"
 
     try:
         et = spice.str2et(utc)
@@ -320,12 +329,16 @@ def main():
     print("""
 The key concepts for JunoCam geometric correction:
 
-1. TIME CONVERSION: Convert image filename → SCLK → ET
-2. SPACECRAFT STATE: Get position/velocity at time T
-3. MOTION CALCULATION: Compute displacement during filter exposure
-4. ANGULAR SHIFT: displacement / range → angular shift
-5. PIXEL SHIFT: angular shift / pixel_scale → pixel offset
-6. GEOMETRIC CORRECTION: Shift each color channel by calculated offset
+1. METADATA: Extract SPACECRAFT_CLOCK_START_COUNT from JSON metadata file
+   (The filename ID is NOT a hex SCLK - it's orbit+filter+index!)
+2. TIME CONVERSION: Convert SCLK → ET using SPICE
+3. SPACECRAFT STATE: Get position/velocity at time T
+4. MOTION CALCULATION: Compute displacement during filter exposure
+5. ANGULAR SHIFT: displacement / range → angular shift
+6. PIXEL SHIFT: angular shift / pixel_scale → pixel offset
+7. GEOMETRIC CORRECTION: Shift each color channel by calculated offset
+
+IMPORTANT: You need both the image file AND its metadata JSON file!
 
 Once you have all kernels loaded, the spice_correction.py module
 automates these steps for each frame in your image.
