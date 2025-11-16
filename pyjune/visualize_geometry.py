@@ -79,8 +79,8 @@ def main():
             # Transform to J2000
             camera_boresight_j2000 = rotation.T @ camera_boresight_inst
 
-            # Scale for visualization
-            camera_pointing = pos + camera_boresight_j2000 * 10000  # 10,000 km arrow
+            # Scale for visualization (make it long to show pointing direction)
+            camera_pointing = pos + camera_boresight_j2000 * 1000000  # 100,000 km arrow
 
             has_pointing = True
             print(f"  Camera boresight: [{camera_boresight_j2000[0]:8.3f}, {camera_boresight_j2000[1]:8.3f}, {camera_boresight_j2000[2]:8.3f}]")
