@@ -1,50 +1,28 @@
 """
-JunoCam image processing with SPICE-based geometric correction.
+JunoCam image processing with SPICE kernel and metadata support.
 
-This version integrates spacecraft motion correction using SPICE kernels.
+Baby steps version - just loads kernels and metadata properly,
+basic image processing without geometric correction.
 """
 
 import cv2
 import numpy as np
 from pathlib import Path
 import sys
+import spiceypy as spice
 
 from spice_correction import SpiceKernelManager, JunoCamImage
 
 
-def apply_geometric_correction(strip, dx, dy):
+def process_junocam_simple(fname):
     """
-    Apply geometric correction to a single image strip.
-
-    Args:
-        strip: Image strip as numpy array
-        dx: Horizontal pixel offset
-        dy: Vertical pixel offset
-
-    Returns:
-        Corrected strip
-    """
-    # Use affine transformation to shift the image
-    # Create translation matrix
-    rows, cols = strip.shape[:2]
-    M = np.float32([[1, 0, dx], [0, 1, dy]])
-
-    # Apply transformation
-    corrected = cv2.warpAffine(strip, M, (cols, rows), flags=cv2.INTER_LINEAR)
-
-    return corrected
-
-
-def process_junocam_with_spice(fname, kernel_manager):
-    """
-    Process JunoCam image with SPICE-based geometric correction.
+    Process JunoCam image - basic channel extraction.
 
     Args:
         fname: Path to raw JunoCam image
-        kernel_manager: Initialized SpiceKernelManager
 
     Returns:
-        Tuple of (red, green, blue) corrected channel mosaics
+        Tuple of (red, green, blue) channel mosaics
     """
     # Load raw image
     raw = cv2.imread(str(fname), cv2.IMREAD_UNCHANGED)
@@ -64,27 +42,8 @@ def process_junocam_with_spice(fname, kernel_manager):
     frames = rows // (bandHeight * bands)
     print(f"Frames count: {frames}")
 
-    # Initialize SPICE correction
-    # Pass full path so metadata search works in correct directory
-    junocam_img = JunoCamImage(fname)
-
-    # Get pixel offsets from SPICE
-    print("Calculating SPICE-based pixel offsets...")
-    try:
-        pixel_offsets = junocam_img.calculate_pixel_offsets(
-            band_height=bandHeight,
-            num_frames=frames
-        )
-        use_spice = True
-        print("SPICE correction enabled")
-    except Exception as e:
-        print(f"Warning: Could not calculate SPICE offsets: {e}")
-        print("Falling back to no correction")
-        use_spice = False
-        pixel_offsets = None
-
     # Filter offsets in the raw image
-    # Assuming order: Blue, Green, Red
+    # Order: Blue, Green, Red
     redOffset = 2 * bandHeight
     greenOffset = bandHeight
     blueOffset = 0
@@ -94,66 +53,85 @@ def process_junocam_with_spice(fname, kernel_manager):
     greenMosaic = np.zeros((frames * bandHeight, width), dtype=raw.dtype)
     blueMosaic = np.zeros((frames * bandHeight, width), dtype=raw.dtype)
 
-    # Process each frame
-    for f in range(frames):
+    # Process each frame (skip first and last - incomplete data)
+    for f in range(1, frames - 1):
         baseRow = f * bandHeight * bands
-        outRow = f * bandHeight
 
-        # Get SPICE offsets for this frame (if available)
-        if use_spice and f in pixel_offsets:
-            red_dx, red_dy = pixel_offsets[f]['RED']
-            green_dx, green_dy = pixel_offsets[f]['GREEN']
-            blue_dx, blue_dy = pixel_offsets[f]['BLUE']
-        else:
-            # No correction
-            red_dx = red_dy = 0
-            green_dx = green_dy = 0
-            blue_dx = blue_dy = 0
-
-        # Extract strips
+        # Extract strips from raw data
         stripR = raw[baseRow + redOffset : baseRow + redOffset + bandHeight, :]
         stripG = raw[baseRow + greenOffset : baseRow + greenOffset + bandHeight, :]
         stripB = raw[baseRow + blueOffset : baseRow + blueOffset + bandHeight, :]
 
-        # Apply geometric correction
-        if use_spice:
-            stripR = apply_geometric_correction(stripR, red_dx, red_dy)
-            stripG = apply_geometric_correction(stripG, green_dx, green_dy)
-            stripB = apply_geometric_correction(stripB, blue_dx, blue_dy)
+        # Place into mosaics with proper vertical alignment
+        # Each channel has different timing, so different vertical positions
+        redMosaic[
+            f * bandHeight + bandHeight : (f + 1) * bandHeight + bandHeight, :
+        ] = stripR
 
-        # Place into mosaics
-        redMosaic[outRow : outRow + bandHeight, :] = stripR
-        greenMosaic[outRow : outRow + bandHeight, :] = stripG
-        blueMosaic[outRow : outRow + bandHeight, :] = stripB
+        greenMosaic[f * bandHeight : (f + 1) * bandHeight, :] = stripG
+
+        blueMosaic[
+            f * bandHeight - bandHeight : (f + 1) * bandHeight - bandHeight, :
+        ] = stripB
 
     return redMosaic, greenMosaic, blueMosaic
 
 
 def main():
-    cwd = Path.cwd()
-    print(f"Working directory: {cwd}")
+    print("=" * 70)
+    print("JunoCam Processing with SPICE Support (Baby Steps)")
+    print("=" * 70)
 
     # Initialize SPICE kernels
+    print("\n1. Loading SPICE kernels...")
     kernel_manager = SpiceKernelManager()
     kernel_manager.load_kernels()
 
     try:
-        # Process image
-        #fname = Path("images/raw/JNCE_2022056_40C00036_V01-raw.png")
-        fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")    
+        # Load and parse image metadata
+        print("\n2. Loading image and metadata...")
+        fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")
 
-        redMosaic, greenMosaic, blueMosaic = process_junocam_with_spice(
-            fname, kernel_manager
-        )
+        # Parse filename and load metadata
+        junocam_img = JunoCamImage(fname)
+
+        print("\n3. Image metadata:")
+        print(f"   Product ID: {junocam_img.product_id}")
+        print(f"   Date: {junocam_img.year}-{junocam_img.doy:03d}")
+        print(f"   Orbit: {junocam_img.orbit}")
+        print(f"   Filter: {junocam_img.filter_combo}")
+        print(f"   Image index: {junocam_img.image_index}")
+
+        if junocam_img.metadata:
+            print(f"   Image time: {junocam_img.image_time}")
+            print(f"   SCLK: {junocam_img.sclk_string}")
+
+            # Get ephemeris time
+            et = junocam_img.get_ephemeris_time()
+            utc = spice.et2utc(et, "C", 3)
+            print(f"   Ephemeris time: {et:.6f}")
+            print(f"   UTC: {utc}")
+
+            # Get spacecraft state
+            try:
+                state, _ = spice.spkezr("JUNO", et, "J2000", "NONE", "JUPITER")
+                range_km = spice.vnorm(state[:3])
+                print(f"   Range to Jupiter: {range_km:.1f} km")
+            except:
+                print(f"   (Could not query spacecraft state)")
+
+        # Process image (basic, no correction yet)
+        print("\n4. Processing image...")
+        redMosaic, greenMosaic, blueMosaic = process_junocam_simple(fname)
 
         # Save individual channels
         out_dir = Path("images/processed")
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        cv2.imwrite(str(out_dir / "red_channel_spice.png"), redMosaic)
-        cv2.imwrite(str(out_dir / "green_channel_spice.png"), greenMosaic)
-        cv2.imwrite(str(out_dir / "blue_channel_spice.png"), blueMosaic)
-        print("SPICE-corrected single-channel mosaics written.")
+        cv2.imwrite(str(out_dir / "red_channel.png"), redMosaic)
+        cv2.imwrite(str(out_dir / "green_channel.png"), greenMosaic)
+        cv2.imwrite(str(out_dir / "blue_channel.png"), blueMosaic)
+        print("Single-channel mosaics written.")
 
         # Create RGB composite
         red8 = cv2.normalize(redMosaic, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
@@ -163,8 +141,15 @@ def main():
         # Merge into RGB (OpenCV uses BGR)
         rgbMosaic = cv2.merge([blue8, green8, red8])
 
-        cv2.imwrite(str(out_dir / "combined_rgb_spice.png"), rgbMosaic)
-        print("SPICE-corrected combined RGB image written.")
+        cv2.imwrite(str(out_dir / "combined_rgb.png"), rgbMosaic)
+        print("Combined RGB image written.")
+
+        print("\n" + "=" * 70)
+        print("✓ Processing complete!")
+        print("=" * 70)
+        print("\nNext steps:")
+        print("  - Check images/processed/ for output")
+        print("  - Ready to implement SPICE-based geometric correction")
 
     finally:
         # Clean up SPICE kernels
