@@ -8,6 +8,7 @@ filter exposures and correct the resulting image misalignment.
 import spiceypy as spice
 import numpy as np
 from pathlib import Path
+import json
 
 
 class SpiceKernelManager:
@@ -34,14 +35,13 @@ class SpiceKernelManager:
             self.kernel_dir / "ik" / "juno_junocam_v03.ti",
 
             # Spacecraft clock kernel
-            # Replace with your actual SCLK file
-            # Example: self.kernel_dir / "sclk" / "JNO_SCLKSCET.00120.tsc",
+            self.kernel_dir / "sclk" / "jno_sclkscet_00195.tsc",
 
             # Spacecraft trajectory (SPK) - replace with file covering your date
-            # Example: self.kernel_dir / "spk" / "juno_rec_220101_220401_220405.bsp",
+            self.kernel_dir / "spk" / "juno_rec_210513_210630_210707.bsp",
 
             # Spacecraft orientation (CK) - replace with file covering your date
-            # Example: self.kernel_dir / "ck" / "juno_rec_220101_220401_v01.bc",
+            self.kernel_dir / "ck" / "juno_sc_rec_210606_210612_v01.bc",
         ]
 
         for kernel in kernels:
@@ -73,52 +73,162 @@ class JunoCamImage:
     # Each pushframe consists of 3 bands (one per filter)
     FILTER_SEQUENCE = ['BLUE', 'GREEN', 'RED']
 
-    def __init__(self, filename):
+    def __init__(self, filename, metadata_file=None):
         """
         Initialize from JunoCam filename.
 
-        Filename format: JNCE_YYYYDDD_NNNNNNNN_VNN-raw.png
-        Example: JNCE_2022056_40C00036_V01-raw.png
+        Filename format: JNCT_YYYYDDD_OOFNNNNN_VXX.EXT
+        Example: JNCE_2021159_34C00080_V01-raw.png
 
         Where:
-        - YYYY = year (2022)
-        - DDD = day of year (056)
-        - NNNNNNNN = image ID (40C00036)
-        - VNN = version (V01)
+        - JNC = JunoCam
+        - T = product type (E=EDR, R=RDR, M=map)
+        - YYYY = year (2021)
+        - DDD = day of year (159)
+        - OO = orbit number (34)
+        - F = filter combination (C)
+        - NNNNN = image index (00080)
+        - VXX = version (V01)
+
+        Args:
+            filename: Path to image file or just the filename
+            metadata_file: Optional path to metadata JSON. If None, will search
+                          for a JSON file with matching product ID.
         """
         self.filename = Path(filename).name
+        self.filepath = Path(filename)
+        self.metadata_file = metadata_file
         self.parse_filename()
+        self.load_metadata()
 
     def parse_filename(self):
-        """Extract metadata from JunoCam filename."""
-        parts = self.filename.split('_')
+        """
+        Extract metadata from JunoCam filename.
+
+        Format: JNCT_YYYYDDD_OOFNNNNN_VXX
+        """
+        # Remove extension and any suffix like "-raw"
+        base = self.filename.split('.')[0]  # Remove extension
+        base = base.split('-')[0]  # Remove suffix like "raw"
+
+        parts = base.split('_')
+
+        if len(parts) != 4:
+            raise ValueError(f"Invalid JunoCam filename format: {self.filename}")
+
+        # Parse product type
+        product_code = parts[0]  # "JNCE"
+        self.product_type = product_code[3] if len(product_code) >= 4 else 'E'
 
         # Extract year and day of year
-        year_doy = parts[1]  # "2022056"
+        year_doy = parts[1]  # "2021159"
         self.year = int(year_doy[:4])
         self.doy = int(year_doy[4:])
 
-        # Extract image ID (hexadecimal spacecraft clock count)
-        self.image_id = parts[2]
+        # Parse image ID: OOFNNNNN
+        image_id = parts[2]  # "34C00080"
+        self.orbit = int(image_id[:2])  # "34" -> 34
+        self.filter_combo = image_id[2]  # "C"
+        self.image_index = int(image_id[3:])  # "00080" -> 80
 
-        # Convert hex image ID to spacecraft clock
-        # The image ID is the spacecraft clock count in hexadecimal
-        self.sclk_count = int(self.image_id, 16)
+        # Version
+        self.version = parts[3]  # "V01"
 
-        # Convert to string format for SPICE
-        self.sclk_string = f"-61/{self.sclk_count}"
+        # Construct product ID (without extension)
+        self.product_id = base
 
-        print(f"Parsed: Year={self.year}, DOY={self.doy}, SCLK={self.sclk_string}")
+        print(f"Parsed: Year={self.year}, DOY={self.doy}, Orbit={self.orbit}, "
+              f"Filter={self.filter_combo}, Index={self.image_index}")
+
+    def load_metadata(self):
+        """
+        Load metadata from JSON file.
+
+        The metadata contains the actual SPACECRAFT_CLOCK_START_COUNT needed
+        for SPICE calculations.
+
+        Strategy:
+        1. If metadata_file path provided explicitly, use it
+        2. Otherwise, search directory for JSON files
+        3. Match by FILE_NAME field in JSON
+        """
+        if self.metadata_file is None:
+            # Search for metadata file in same directory as image
+            img_dir = self.filepath.parent
+
+            # Search all JSON files in directory
+            json_files = list(img_dir.glob("*.json"))
+
+            if json_files:
+                print(f"Searching {len(json_files)} JSON file(s) for matching metadata...")
+
+                for json_file in json_files:
+                    try:
+                        with open(json_file, 'r') as f:
+                            data = json.load(f)
+
+                        # Check if FILE_NAME field matches our image
+                        file_name_in_meta = data.get('FILE_NAME', '')
+
+                        if file_name_in_meta == self.filename:
+                            self.metadata_file = json_file
+                            self.metadata = data  # Store the loaded metadata
+                            print(f"✓ Found matching metadata: {json_file.name}")
+                            break
+                    except (json.JSONDecodeError, KeyError):
+                        # Skip invalid JSON files
+                        continue
+
+        if self.metadata_file is None:
+            print(f"Warning: No metadata file found for {self.filename}")
+            print(f"Searched directory: {self.filepath.parent}")
+            print("Cannot perform SPICE-based timing calculations without metadata.")
+            self.metadata = None
+            self.sclk_string = None
+            return
+
+        # Load metadata JSON if not already loaded
+        if not hasattr(self, 'metadata') or self.metadata is None:
+            with open(self.metadata_file, 'r') as f:
+                self.metadata = json.load(f)
+
+        # Extract SCLK from metadata
+        sclk_start = self.metadata.get('SPACECRAFT_CLOCK_START_COUNT')
+
+        if sclk_start:
+            # SCLK format in metadata: "676414398:5" (ticks:subseconds)
+            # or possibly "partition/ticks:subseconds"
+            self.sclk_string = sclk_start
+            print(f"Loaded SCLK from metadata: {self.sclk_string}")
+
+            # Also store the image time
+            self.image_time = self.metadata.get('IMAGE_TIME')
+            print(f"Image time: {self.image_time}")
+        else:
+            print(f"Warning: No SPACECRAFT_CLOCK_START_COUNT in metadata")
+            self.sclk_string = None
 
     def get_ephemeris_time(self):
         """Convert spacecraft clock to ephemeris time."""
+        if self.sclk_string is None:
+            # Fallback: use date from filename
+            print("No SCLK available, using filename date (less accurate)")
+            utc = f"{self.year}-{self.doy:03d}T12:00:00"
+            return spice.str2et(utc)
+
         try:
             et = spice.scs2e(self.JUNO_ID, self.sclk_string)
             return et
         except Exception as e:
             print(f"Error converting SCLK to ET: {e}")
-            # Fallback: convert from calendar time
-            utc = f"{self.year}-{self.doy:03d}T00:00:00"
+            # Fallback: use IMAGE_TIME from metadata if available
+            if hasattr(self, 'image_time') and self.image_time:
+                try:
+                    return spice.str2et(self.image_time)
+                except:
+                    pass
+            # Final fallback: convert from calendar time
+            utc = f"{self.year}-{self.doy:03d}T12:00:00"
             return spice.str2et(utc)
 
     def calculate_motion_vector(self, et_start, dt):
@@ -232,11 +342,19 @@ def example_usage():
 
     try:
         # Parse image metadata
-        img = JunoCamImage("JNCE_2022056_40C00036_V01-raw.png")
+        # The JunoCamImage class will automatically search for the metadata JSON
+        img = JunoCamImage("images/raw/JNCE_2021159_34C00080_V01-raw.png")
 
         # Get ephemeris time
         et = img.get_ephemeris_time()
-        print(f"Ephemeris time: {et}")
+        print(f"\nEphemeris time: {et}")
+
+        # Verify it matches the metadata time
+        if hasattr(img, 'image_time'):
+            import spiceypy as spice
+            utc_from_et = spice.et2utc(et, "C", 3)
+            print(f"Converts to UTC: {utc_from_et}")
+            print(f"Metadata says: {img.image_time}")
 
         # Calculate pixel offsets for correction
         offsets = img.calculate_pixel_offsets(band_height=128, num_frames=30)

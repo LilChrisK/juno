@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 from pathlib import Path
 import sys
-from scipy import ndimage
 
 from spice_correction import SpiceKernelManager, JunoCamImage
 
@@ -66,7 +65,8 @@ def process_junocam_with_spice(fname, kernel_manager):
     print(f"Frames count: {frames}")
 
     # Initialize SPICE correction
-    junocam_img = JunoCamImage(Path(fname).name)
+    # Pass full path so metadata search works in correct directory
+    junocam_img = JunoCamImage(fname)
 
     # Get pixel offsets from SPICE
     print("Calculating SPICE-based pixel offsets...")
@@ -139,7 +139,8 @@ def main():
 
     try:
         # Process image
-        fname = Path("images/raw/JNCE_2022056_40C00036_V01-raw.png")
+        #fname = Path("images/raw/JNCE_2022056_40C00036_V01-raw.png")
+        fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")    
 
         redMosaic, greenMosaic, blueMosaic = process_junocam_with_spice(
             fname, kernel_manager
