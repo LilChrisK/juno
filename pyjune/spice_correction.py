@@ -24,22 +24,16 @@ class SpiceKernelManager:
         kernels = [
             # Leapseconds kernel (for time conversions)
             self.kernel_dir / "lsk" / "naif0012.tls",
-
             # Planetary constants
             self.kernel_dir / "pck" / "pck00010.tpc",
-
             # Juno frames kernel
             self.kernel_dir / "fk" / "juno_v12.tf",
-
             # JunoCam instrument kernel
             self.kernel_dir / "ik" / "juno_junocam_v03.ti",
-
             # Spacecraft clock kernel
             self.kernel_dir / "sclk" / "jno_sclkscet_00195.tsc",
-
             # Spacecraft trajectory (SPK) - replace with file covering your date
             self.kernel_dir / "spk" / "juno_rec_210513_210630_210707.bsp",
-
             # Spacecraft orientation (CK) - replace with file covering your date
             self.kernel_dir / "ck" / "juno_sc_rec_210606_210612_v01.bc",
         ]
@@ -71,7 +65,7 @@ class JunoCamImage:
 
     # Filters are acquired in order: Blue, Green, Red (typically)
     # Each pushframe consists of 3 bands (one per filter)
-    FILTER_SEQUENCE = ['BLUE', 'GREEN', 'RED']
+    FILTER_SEQUENCE = ["BLUE", "GREEN", "RED"]
 
     def __init__(self, filename, metadata_file=None):
         """
@@ -108,17 +102,17 @@ class JunoCamImage:
         Format: JNCT_YYYYDDD_OOFNNNNN_VXX
         """
         # Remove extension and any suffix like "-raw"
-        base = self.filename.split('.')[0]  # Remove extension
-        base = base.split('-')[0]  # Remove suffix like "raw"
+        base = self.filename.split(".")[0]  # Remove extension
+        base = base.split("-")[0]  # Remove suffix like "raw"
 
-        parts = base.split('_')
+        parts = base.split("_")
 
         if len(parts) != 4:
             raise ValueError(f"Invalid JunoCam filename format: {self.filename}")
 
         # Parse product type
         product_code = parts[0]  # "JNCE"
-        self.product_type = product_code[3] if len(product_code) >= 4 else 'E'
+        self.product_type = product_code[3] if len(product_code) >= 4 else "E"
 
         # Extract year and day of year
         year_doy = parts[1]  # "2021159"
@@ -137,8 +131,10 @@ class JunoCamImage:
         # Construct product ID (without extension)
         self.product_id = base
 
-        print(f"Parsed: Year={self.year}, DOY={self.doy}, Orbit={self.orbit}, "
-              f"Filter={self.filter_combo}, Index={self.image_index}")
+        print(
+            f"Parsed: Year={self.year}, DOY={self.doy}, Orbit={self.orbit}, "
+            f"Filter={self.filter_combo}, Index={self.image_index}"
+        )
 
     def load_metadata(self):
         """
@@ -160,15 +156,17 @@ class JunoCamImage:
             json_files = list(img_dir.glob("*.json"))
 
             if json_files:
-                print(f"Searching {len(json_files)} JSON file(s) for matching metadata...")
+                print(
+                    f"Searching {len(json_files)} JSON file(s) for matching metadata..."
+                )
 
                 for json_file in json_files:
                     try:
-                        with open(json_file, 'r') as f:
+                        with open(json_file, "r") as f:
                             data = json.load(f)
 
                         # Check if FILE_NAME field matches our image
-                        file_name_in_meta = data.get('FILE_NAME', '')
+                        file_name_in_meta = data.get("FILE_NAME", "")
 
                         if file_name_in_meta == self.filename:
                             self.metadata_file = json_file
@@ -188,12 +186,12 @@ class JunoCamImage:
             return
 
         # Load metadata JSON if not already loaded
-        if not hasattr(self, 'metadata') or self.metadata is None:
-            with open(self.metadata_file, 'r') as f:
+        if not hasattr(self, "metadata") or self.metadata is None:
+            with open(self.metadata_file, "r") as f:
                 self.metadata = json.load(f)
 
         # Extract SCLK from metadata
-        sclk_start = self.metadata.get('SPACECRAFT_CLOCK_START_COUNT')
+        sclk_start = self.metadata.get("SPACECRAFT_CLOCK_START_COUNT")
 
         if sclk_start:
             # SCLK format in metadata: "676414398:5" (ticks:subseconds)
@@ -202,7 +200,7 @@ class JunoCamImage:
             print(f"Loaded SCLK from metadata: {self.sclk_string}")
 
             # Also store the image time
-            self.image_time = self.metadata.get('IMAGE_TIME')
+            self.image_time = self.metadata.get("IMAGE_TIME")
             print(f"Image time: {self.image_time}")
         else:
             print(f"Warning: No SPACECRAFT_CLOCK_START_COUNT in metadata")
@@ -222,7 +220,7 @@ class JunoCamImage:
         except Exception as e:
             print(f"Error converting SCLK to ET: {e}")
             # Fallback: use IMAGE_TIME from metadata if available
-            if hasattr(self, 'image_time') and self.image_time:
+            if hasattr(self, "image_time") and self.image_time:
                 try:
                     return spice.str2et(self.image_time)
                 except:
@@ -230,4 +228,3 @@ class JunoCamImage:
             # Final fallback: convert from calendar time
             utc = f"{self.year}-{self.doy:03d}T12:00:00"
             return spice.str2et(utc)
-

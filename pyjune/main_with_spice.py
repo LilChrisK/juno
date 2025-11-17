@@ -13,11 +13,13 @@ import spiceypy as spice
 from dataclasses import dataclass
 
 from spice_correction import SpiceKernelManager, JunoCamImage
+from utils import create_debug_visualization
 
 
 @dataclass
 class Framelet:
     """Represents a single framelet (color band strip) from JunoCam."""
+
     frame_number: int
     color: str  # 'red', 'green', or 'blue'
     color_index: int  # 0=blue, 1=green, 2=red
@@ -94,83 +96,6 @@ def process_junocam_simple(fname):
 
     return redMosaic, greenMosaic, blueMosaic
 
-def create_debug_visualization(fname, output_path):
-    """
-    Create a debug image showing frame and band structure.
-
-    Args:
-        fname: Path to raw JunoCam image
-        output_path: Where to save the debug image
-    """
-    # Load raw image
-    raw = cv2.imread(str(fname), cv2.IMREAD_UNCHANGED)
-    if raw is None:
-        print(f"Could not open raw image: {fname}")
-        return
-
-    height, width = raw.shape[:2]
-
-    # Convert to BGR for colored overlays
-    if len(raw.shape) == 2:  # Grayscale
-        debug_img = cv2.cvtColor(raw, cv2.COLOR_GRAY2BGR)
-    else:
-        debug_img = raw.copy()
-
-    # Normalize to 8-bit for visualization
-    debug_img = cv2.normalize(debug_img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-
-    # JunoCam parameters
-    band_height = 128
-    bands = 3
-    frame_height = band_height * bands
-    frames = height // frame_height
-
-    color_map = {0: 'BLUE', 1: 'GREEN', 2: 'RED'}
-
-    # Draw frame separators (red) and band separators (blue)
-    for f in range(frames + 1):
-        y = f * frame_height
-        if y < height:
-            # Red line for frame boundary
-            cv2.line(debug_img, (0, y), (width, y), (0, 0, 255), 3)
-
-    for f in range(frames):
-        for b in range(1, bands):  # Don't redraw frame boundaries
-            y = f * frame_height + b * band_height
-            if y < height:
-                # Blue line for band boundary
-                cv2.line(debug_img, (0, y), (width, y), (255, 0, 0), 2)
-
-    # Label each framelet
-    for f in range(frames):
-        for color_idx in range(bands):
-            y_center = f * frame_height + color_idx * band_height + band_height // 2
-
-            # Create label
-            label = f"F{f} {color_map[color_idx]}"
-
-            # Put text with background for readability
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.8
-            thickness = 2
-
-            # Get text size for background
-            (text_width, text_height), baseline = cv2.getTextSize(label, font, font_scale, thickness)
-
-            # Draw black background rectangle
-            cv2.rectangle(debug_img,
-                         (10, y_center - text_height - 5),
-                         (10 + text_width + 10, y_center + 5),
-                         (0, 0, 0), -1)
-
-            # Draw text
-            cv2.putText(debug_img, label, (15, y_center),
-                       font, font_scale, (255, 255, 255), thickness)
-
-    # Save debug image
-    cv2.imwrite(str(output_path), debug_img)
-    print(f"Debug visualization saved to {output_path}")
-
 
 def process_junocam_2(fname):
     """
@@ -202,13 +127,9 @@ def process_junocam_2(fname):
     print(f"Frames count: {frames}")
 
     # Color mapping
-    color_map = {0: 'blue', 1: 'green', 2: 'red'}
+    color_map = {0: "blue", 1: "green", 2: "red"}
 
-    framelets_by_color = {
-        'red': [],
-        'green': [],
-        'blue': []
-    }
+    framelets_by_color = {"red": [], "green": [], "blue": []}
 
     for f in range(frames):
         for color_idx in range(bands):
@@ -219,20 +140,25 @@ def process_junocam_2(fname):
                 frame_number=f,
                 color=color_map[color_idx],
                 color_index=color_idx,
-                data=framelet_data.copy()  # Copy to avoid reference issues
+                data=framelet_data.copy(),  # Copy to avoid reference issues
             )
             framelets_by_color[framelet.color].append(framelet)
 
     total_framelets = sum(len(v) for v in framelets_by_color.values())
-    print(f"Extracted {total_framelets} framelets (R:{len(framelets_by_color['red'])}, "
-          f"G:{len(framelets_by_color['green'])}, B:{len(framelets_by_color['blue'])})")
+    print(
+        f"Extracted {total_framelets} framelets (R:{len(framelets_by_color['red'])}, "
+        f"G:{len(framelets_by_color['green'])}, B:{len(framelets_by_color['blue'])})"
+    )
 
     # Reconstruct color channel mosaics from framelets
-    return _reconstruct_mosaics(framelets_by_color, frames, band_height, width, raw.dtype)
+    return _reconstruct_mosaics(
+        framelets_by_color, frames, band_height, width, raw.dtype
+    )
 
 
-def _reconstruct_mosaics(framelets_by_color: dict, frames: int, band_height: int,
-                         width: int, dtype) -> tuple:
+def _reconstruct_mosaics(
+    framelets_by_color: dict, frames: int, band_height: int, width: int, dtype
+) -> tuple:
     """
     Reconstruct RGB mosaics from framelet objects grouped by color.
 
@@ -255,7 +181,7 @@ def _reconstruct_mosaics(framelets_by_color: dict, frames: int, band_height: int
     # The RGB filters are at different physical positions on the sensor,
     # so they image different parts of the scene at the same time
     # Skip first and last frames - incomplete data
-    for framelet in framelets_by_color['red']:
+    for framelet in framelets_by_color["red"]:
         f = framelet.frame_number
         if f == 0 or f >= frames - 1:
             continue
@@ -264,14 +190,14 @@ def _reconstruct_mosaics(framelets_by_color: dict, frames: int, band_height: int
             f * band_height + band_height : (f + 1) * band_height + band_height, :
         ] = framelet.data
 
-    for framelet in framelets_by_color['green']:
+    for framelet in framelets_by_color["green"]:
         f = framelet.frame_number
         if f == 0 or f >= frames - 1:
             continue
         # Green is the middle filter - use as reference
         green_mosaic[f * band_height : (f + 1) * band_height, :] = framelet.data
 
-    for framelet in framelets_by_color['blue']:
+    for framelet in framelets_by_color["blue"]:
         f = framelet.frame_number
         if f == 0 or f >= frames - 1:
             continue
@@ -348,8 +274,12 @@ def main():
 
         # Create RGB composite
         red8 = cv2.normalize(redMosaic, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        green8 = cv2.normalize(greenMosaic, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        blue8 = cv2.normalize(blueMosaic, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        green8 = cv2.normalize(greenMosaic, None, 0, 255, cv2.NORM_MINMAX).astype(
+            np.uint8
+        )
+        blue8 = cv2.normalize(blueMosaic, None, 0, 255, cv2.NORM_MINMAX).astype(
+            np.uint8
+        )
 
         # Merge into RGB (OpenCV uses BGR)
         rgbMosaic = cv2.merge([blue8, green8, red8])
@@ -361,12 +291,13 @@ def main():
         print("Processing complete!")
         print("=" * 70)
         print("\nGenerated files:")
-        print("  - debug_frame_structure.png: Annotated raw image showing frame/band layout")
-        print("  - red_channel.png, green_channel.png, blue_channel.png: Individual channels")
+        print(
+            "  - debug_frame_structure.png: Annotated raw image showing frame/band layout"
+        )
+        print(
+            "  - red_channel.png, green_channel.png, blue_channel.png: Individual channels"
+        )
         print("  - combined_rgb.png: RGB composite")
-        print("\nNext steps:")
-        print("  - Review debug image to understand frame structure")
-        print("  - Ready to implement SPICE-based geometric correction")
 
     finally:
         # Clean up SPICE kernels

@@ -27,18 +27,15 @@ def load_kernels():
     kernels = [
         # Time conversion kernels (required for all operations)
         kernel_dir / "lsk" / "naif0012.tls",
-
         # Planetary constants
         kernel_dir / "pck" / "pck00010.tpc",
-
         # Juno-specific kernels
         kernel_dir / "fk" / "juno_v12.tf",
         kernel_dir / "ik" / "juno_junocam_v03.ti",
         kernel_dir / "sclk" / "jno_sclkscet_00195.tsc",
-
         # Time-dependent kernels (MUST cover 2022-056)
         kernel_dir / "spk" / "juno_rec_210513_210630_210707.bsp",
-        kernel_dir / "ck" / "juno_sc_rec_210606_210612_v01.bc"
+        kernel_dir / "ck" / "juno_sc_rec_210606_210612_v01.bc",
     ]
 
     loaded = []
@@ -139,18 +136,22 @@ def explore_spacecraft_state():
         # spkezr returns: [x, y, z, vx, vy, vz] and light time
         print("Juno state relative to Jupiter (J2000 frame):")
         state, lt = spice.spkezr(
-            "JUNO",      # Target: Juno spacecraft
-            et,          # Time (ephemeris time)
-            "J2000",     # Reference frame
-            "NONE",      # Aberration correction
-            "JUPITER"    # Observer: Jupiter
+            "JUNO",  # Target: Juno spacecraft
+            et,  # Time (ephemeris time)
+            "J2000",  # Reference frame
+            "NONE",  # Aberration correction
+            "JUPITER",  # Observer: Jupiter
         )
 
         position = state[:3]  # km
         velocity = state[3:]  # km/s
 
-        print(f"Position (km): [{position[0]:12.3f}, {position[1]:12.3f}, {position[2]:12.3f}]")
-        print(f"Velocity (km/s): [{velocity[0]:9.6f}, {velocity[1]:9.6f}, {velocity[2]:9.6f}]")
+        print(
+            f"Position (km): [{position[0]:12.3f}, {position[1]:12.3f}, {position[2]:12.3f}]"
+        )
+        print(
+            f"Velocity (km/s): [{velocity[0]:9.6f}, {velocity[1]:9.6f}, {velocity[2]:9.6f}]"
+        )
         print(f"Range (km): {spice.vnorm(position):12.3f}")
         print(f"Speed (km/s): {spice.vnorm(velocity):9.6f}")
         print(f"Light time (s): {lt:.6f}")
@@ -168,8 +169,12 @@ def explore_spacecraft_state():
         displacement = state_end[:3] - state_start[:3]
 
         print(f"Time interval: {dt * 1000:.3f} milliseconds")
-        print(f"Displacement (km): [{displacement[0]:.9f}, {displacement[1]:.9f}, {displacement[2]:.9f}]")
-        print(f"Displacement (meters): [{displacement[0]*1000:.6f}, {displacement[1]*1000:.6f}, {displacement[2]*1000:.6f}]")
+        print(
+            f"Displacement (km): [{displacement[0]:.9f}, {displacement[1]:.9f}, {displacement[2]:.9f}]"
+        )
+        print(
+            f"Displacement (meters): [{displacement[0]*1000:.6f}, {displacement[1]*1000:.6f}, {displacement[2]*1000:.6f}]"
+        )
 
         # This displacement causes the pixel shifts you see in your images!
 
@@ -326,7 +331,8 @@ def main():
     calculate_pixel_shift_example()
 
     print_section("Summary")
-    print("""
+    print(
+        """
 The key concepts for JunoCam geometric correction:
 
 1. METADATA: Extract SPACECRAFT_CLOCK_START_COUNT from JSON metadata file
@@ -342,7 +348,8 @@ IMPORTANT: You need both the image file AND its metadata JSON file!
 
 Once you have all kernels loaded, the spice_correction.py module
 automates these steps for each frame in your image.
-    """)
+    """
+    )
 
     # Clean up
     spice.kclear()
