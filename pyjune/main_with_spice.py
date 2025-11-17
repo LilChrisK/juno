@@ -296,8 +296,9 @@ def main():
     try:
         # Load and parse image metadata
         print("\n2. Loading image and metadata...")
-        fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")
-
+        # fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")
+        # fname = Path("images/raw/JNCE_2021159_34C00055_V01-raw.png")
+        fname = Path("images/raw/JNCE_2021159_34C00048_V01-raw.png")
         # Parse filename and load metadata
         junocam_img = JunoCamImage(fname)
 
