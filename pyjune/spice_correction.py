@@ -6,7 +6,6 @@ filter exposures and correct the resulting image misalignment.
 """
 
 import spiceypy as spice
-import numpy as np
 from pathlib import Path
 import json
 
