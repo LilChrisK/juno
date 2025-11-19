@@ -24,6 +24,7 @@ class Framelet:
     color: str  # 'red', 'green', or 'blue'
     color_index: int  # 0=blue, 1=green, 2=red
     data: np.ndarray
+    et: float = 0.0  # Ephemeris time for this framelet
 
     @property
     def height(self) -> int:

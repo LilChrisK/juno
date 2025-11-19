@@ -17,12 +17,14 @@ from map_projection import JupiterEllipsoid, FrameletProjector, OrthographicProj
 from main import Framelet
 
 
-def extract_framelets(fname: Path) -> dict:
+def extract_framelets(fname: Path, start_et: float = 0.0, interframe_delay: float = 0.0) -> dict:
     """
     Extract framelets organized by color from raw JunoCam image.
 
     Args:
         fname: Path to raw image file
+        start_et: Start ephemeris time of first frame
+        interframe_delay: Time between frames (seconds)
 
     Returns:
         Dictionary mapping color names to lists of Framelet objects
@@ -52,6 +54,9 @@ def extract_framelets(fname: Path) -> dict:
 
     # Extract framelets
     for frame_idx in range(num_frames):
+        # Compute ephemeris time for this frame
+        frame_et = start_et + frame_idx * interframe_delay
+
         for color_idx in range(bands):
             base_row = frame_idx * frame_height + color_idx * band_height
             framelet_data = raw[base_row : base_row + band_height, :]
@@ -61,6 +66,7 @@ def extract_framelets(fname: Path) -> dict:
                 color=color_map[color_idx],
                 color_index=color_idx,
                 data=framelet_data.copy(),
+                et=frame_et,
             )
             framelets_by_color[framelet.color].append(framelet)
 
@@ -71,41 +77,6 @@ def extract_framelets(fname: Path) -> dict:
     print(f"  Blue:  {len(framelets_by_color['blue'])}")
 
     return framelets_by_color
-
-
-def compute_framelet_timing(
-    start_et: float,
-    interframe_delay: float,
-    frame_number: int,
-    color: str
-) -> float:
-    """
-    Compute ephemeris time for a specific framelet.
-
-    Args:
-        start_et: Start ephemeris time of first frame
-        interframe_delay: Time between frames (seconds)
-        frame_number: Frame index
-        color: Color name ('blue', 'green', 'red')
-
-    Returns:
-        Ephemeris time for this framelet
-    """
-    # Base time for this frame
-    frame_et = start_et + frame_number * interframe_delay
-
-    # Color-specific timing offset within frame
-    # Order of acquisition: Blue, Green, Red
-    # Approximate timing between color filters (milliseconds)
-    filter_delay = 0.001  # 1 ms between filters (approximate)
-
-    color_offsets = {
-        'blue': 0.0,  # First exposure
-        'green': filter_delay,  # Second exposure
-        'red': 2.0 * filter_delay,  # Third exposure
-    }
-
-    return frame_et + color_offsets[color]
 
 
 def determine_map_center(junocam_img: JunoCamImage, ellipsoid: JupiterEllipsoid) -> tuple:
@@ -208,12 +179,8 @@ def project_junocam_to_map(
     print("MAP PROJECTION")
     print("=" * 70)
 
-    # Extract framelets
-    print("\n1. Extracting framelets...")
-    framelets_by_color = extract_framelets(fname)
-
     # Get timing information
-    print("\n2. Computing timing...")
+    print("\n1. Computing timing...")
     start_et = junocam_img.get_ephemeris_time()
 
     if junocam_img.metadata:
@@ -223,6 +190,10 @@ def project_junocam_to_map(
     else:
         print("   WARNING: No metadata, using default 0.371s")
         interframe_delay = 0.371
+
+    # Extract framelets
+    print("\n2. Extracting framelets...")
+    framelets_by_color = extract_framelets(fname, start_et, interframe_delay)
 
     # Determine map center
     print("\n3. Determining map center...")
@@ -275,20 +246,12 @@ def project_junocam_to_map(
 
             frame_start = time.time()
 
-            # Compute timing
-            et = compute_framelet_timing(
-                start_et,
-                interframe_delay,
-                framelet.frame_number,
-                color
-            )
-
             # Create framelet projector
             try:
                 t0 = time.time()
                 fp = FrameletProjector(
                     ellipsoid=ellipsoid,
-                    et=et,
+                    et=framelet.et,
                     framelet_index=framelet.frame_number,
                     color=color,
                     fov_data=fov_data
@@ -356,35 +319,35 @@ def project_junocam_to_map(
     # TEMPORARY: Only save green channel for testing
     save_channel(map_green, f"{product_id}_map_green.png")
 
-    # Also save as 8-bit for easier viewing
-    if map_green.max() > 0:
-        green8 = (map_green / map_green.max() * 255).astype(np.uint8)
-    else:
-        green8 = np.zeros_like(map_green, dtype=np.uint8)
-    cv2.imwrite(str(output_dir / f"{product_id}_map_green_8bit.png"), green8)
-    print(f"   Saved: {product_id}_map_green_8bit.png")
+    # # Also save as 8-bit for easier viewing
+    # if map_green.max() > 0:
+    #     green8 = (map_green / map_green.max() * 255).astype(np.uint8)
+    # else:
+    #     green8 = np.zeros_like(map_green, dtype=np.uint8)
+    # cv2.imwrite(str(output_dir / f"{product_id}_map_green_8bit.png"), green8)
+    # print(f"   Saved: {product_id}_map_green_8bit.png")
 
-    # Save metadata
-    metadata = {
-        "product_id": product_id,
-        "projection": "orthographic",
-        "center_longitude_deg": center_lon,
-        "center_latitude_deg": center_lat,
-        "map_width_pixels": map_size,
-        "map_height_pixels": map_size,
-        "scale_km_per_pixel": scale_km_per_pixel,
-        "ellipsoid_radii_km": {
-            "equatorial_a": ellipsoid.a,
-            "equatorial_b": ellipsoid.b,
-            "polar_c": ellipsoid.c
-        },
-        "sample_step": sample_step,
-        "spacecraft_range_km": float(range_km)
-    }
+    # # Save metadata
+    # metadata = {
+    #     "product_id": product_id,
+    #     "projection": "orthographic",
+    #     "center_longitude_deg": center_lon,
+    #     "center_latitude_deg": center_lat,
+    #     "map_width_pixels": map_size,
+    #     "map_height_pixels": map_size,
+    #     "scale_km_per_pixel": scale_km_per_pixel,
+    #     "ellipsoid_radii_km": {
+    #         "equatorial_a": ellipsoid.a,
+    #         "equatorial_b": ellipsoid.b,
+    #         "polar_c": ellipsoid.c
+    #     },
+    #     "sample_step": sample_step,
+    #     "spacecraft_range_km": float(range_km)
+    # }
 
-    with open(output_dir / f"{product_id}_map_metadata.json", 'w') as f:
-        json.dump(metadata, f, indent=2)
-    print(f"   Saved: {product_id}_map_metadata.json")
+    # with open(output_dir / f"{product_id}_map_metadata.json", 'w') as f:
+    #     json.dump(metadata, f, indent=2)
+    # print(f"   Saved: {product_id}_map_metadata.json")
 
     print("\n" + "=" * 70)
     print("MAP PROJECTION COMPLETE!")
