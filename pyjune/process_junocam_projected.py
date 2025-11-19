@@ -162,7 +162,6 @@ def project_junocam_to_map(
     ellipsoid: JupiterEllipsoid,
     output_dir: Path,
     map_size: int = 2048,
-    sample_step: int = 4
 ):
     """
     Project JunoCam image onto orthographic map.
@@ -221,8 +220,8 @@ def project_junocam_to_map(
         scale_km_per_pixel=scale_km_per_pixel
     )
 
-    # Project each color channel
-    print("\n5. Projecting framelets...")
+    # Project each color channel using BACKWARD SAMPLING
+    print("\n5. Projecting framelets (backward sampling)...")
 
     # Get FOV data once (constant for all framelets)
     print("   Loading JunoCam FOV data...")
@@ -235,9 +234,7 @@ def project_junocam_to_map(
 
         # Timing benchmarks
         time_init = 0.0
-        time_project = 0.0
-        time_accumulate = 0.0
-        total_points = 0
+        time_sample = 0.0
 
         for idx, framelet in enumerate(framelets):
             # Skip incomplete first and last frames
@@ -259,42 +256,26 @@ def project_junocam_to_map(
                 t1 = time.time()
                 time_init += (t1 - t0)
 
-                # Project framelet pixels to surface
+                # Use backward sampling: sample framelet at all map positions
                 t0 = time.time()
-                surface_points = fp.project_framelet(
-                    framelet.data,
-                    sample_step=sample_step
-                )
+                projector.add_framelet_backward(fp, framelet.data, color)
                 t1 = time.time()
-                time_project += (t1 - t0)
-
-                # Add points to map
-                t0 = time.time()
-                for point in surface_points:
-                    # Get pixel value from framelet
-                    pixel_value = framelet.data[point.pixel_y, point.pixel_x]
-
-                    # Add to map
-                    projector.add_surface_point(point, float(pixel_value), color)
-                t1 = time.time()
-                time_accumulate += (t1 - t0)
-
-                total_points += len(surface_points)
+                time_sample += (t1 - t0)
 
                 frame_elapsed = time.time() - frame_start
                 if idx % 5 == 0:
-                    print(f"      Frame {framelet.frame_number:3d}: {len(surface_points):5d} points, {frame_elapsed:.2f}s")
+                    print(f"      Frame {framelet.frame_number:3d}: {frame_elapsed:.2f}s")
 
             except Exception as e:
                 print(f"      Frame {framelet.frame_number:3d}: ERROR - {e}")
+                import traceback
+                traceback.print_exc()
                 continue
 
         # Print timing summary
         print("\n   Timing breakdown:")
         print(f"     Initialization: {time_init:.2f}s")
-        print(f"     Projection:     {time_project:.2f}s")
-        print(f"     Accumulation:   {time_accumulate:.2f}s")
-        print(f"     Total points:   {total_points:,}")
+        print(f"     Sampling:       {time_sample:.2f}s")
 
     # Get final maps
     print("\n6. Generating final maps...")
@@ -394,7 +375,9 @@ def main():
             ellipsoid=ellipsoid,
             output_dir=output_dir,
             map_size=2048,
-            sample_step=1  # Dense sampling for single channel testing
+            # sample_step=2
+            # map_size=2048,
+            # sample_step=1  # Dense sampling for single channel testing
         )
 
     finally:

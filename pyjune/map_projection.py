@@ -416,6 +416,113 @@ class FrameletProjector:
             pixel_y=pixel_y
         )
 
+    def sample_at_surface_positions(
+        self,
+        surface_positions: np.ndarray,
+        framelet_data: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Sample framelet pixel values at given surface positions (backward sampling).
+
+        This is the key method for creating dense maps: instead of projecting
+        framelet pixels to the map, we sample the framelet at map positions.
+
+        Args:
+            surface_positions: Array of surface points in J2000 (shape: [..., 3])
+            framelet_data: Framelet image data (height x width)
+
+        Returns:
+            Tuple of (pixel_values, valid_mask):
+                - pixel_values: Interpolated brightness values (shape: [...])
+                - valid_mask: Boolean mask of valid samples (shape: [...])
+        """
+        from scipy.interpolate import RectBivariateSpline
+
+        # Store original shape
+        original_shape = surface_positions.shape[:-1]
+
+        # Flatten to process all positions
+        flat_positions = surface_positions.reshape(-1, 3)
+
+        # Filter out NaN positions (outside visible hemisphere)
+        valid_surface_mask = ~np.isnan(flat_positions[:, 0])
+
+        # For each surface position, compute which pixel it corresponds to
+        height, width = framelet_data.shape
+
+        # Initialize validity mask
+        valid_mask = np.zeros(len(flat_positions), dtype=bool)
+
+        # Only process valid surface points
+        if np.any(valid_surface_mask):
+            valid_positions = flat_positions[valid_surface_mask]
+
+            # Transform surface positions to camera frame
+            # rays go from camera to surface points
+            rays = valid_positions - self.sc_position
+
+            # Transform from J2000 to instrument frame
+            # camera_rotation transforms inst->J2000, so for row vectors:
+            # J2000->inst requires: rays @ camera_rotation (NOT .T)
+            rays_inst = rays @ self.camera_rotation
+
+            # Convert rays to pixel coordinates
+            # Map angles to pixel coordinates using FOV
+            with np.errstate(divide='ignore', invalid='ignore'):
+                angle_x = np.arctan2(rays_inst[:, 0], rays_inst[:, 2])
+                angle_y = np.arctan2(rays_inst[:, 1], rays_inst[:, 2])
+
+            # Map angles to pixel coordinates
+            pixel_x = (angle_x - self.fov_x_min_rad) / (self.fov_x_max_rad - self.fov_x_min_rad) * (width - 1)
+            pixel_y = (angle_y - self.fov_y_min_rad) / (self.fov_y_max_rad - self.fov_y_min_rad) * (height - 1)
+
+            # Check which pixels are valid (within framelet bounds and in front of camera)
+            framelet_valid_mask = (
+                (pixel_x >= 0) & (pixel_x < width - 1) &
+                (pixel_y >= 0) & (pixel_y < height - 1) &
+                (rays_inst[:, 2] > 0)  # In front of camera
+            )
+
+            # Update the full valid mask
+            valid_mask[valid_surface_mask] = framelet_valid_mask
+        else:
+            pixel_x = np.array([])
+            pixel_y = np.array([])
+
+        # Initialize output
+        pixel_values = np.zeros(len(flat_positions), dtype=np.float32)
+
+        # Use bilinear interpolation for valid pixels
+        num_valid = np.sum(valid_mask)
+        if num_valid > 0 and len(pixel_x) > 0:
+            # Create interpolation function
+            interp_func = RectBivariateSpline(
+                np.arange(height),
+                np.arange(width),
+                framelet_data,
+                kx=1, ky=1  # Linear interpolation
+            )
+
+            # Sample at valid positions (these are already filtered)
+            valid_px = pixel_x[framelet_valid_mask]
+            valid_py = pixel_y[framelet_valid_mask]
+
+            if len(valid_px) > 0:
+                # Interpolate (note: RectBivariateSpline takes (y, x) order)
+                sampled_values = interp_func(valid_py, valid_px, grid=False)
+
+                # Place sampled values in the correct positions
+                pixel_values[valid_mask] = sampled_values
+
+                # Debug: print sample statistics
+                print(f"      Valid samples: {num_valid}, value range: [{sampled_values.min():.1f}, {sampled_values.max():.1f}]")
+
+        # Reshape to original shape
+        pixel_values = pixel_values.reshape(original_shape)
+        valid_mask = valid_mask.reshape(original_shape)
+
+        return pixel_values, valid_mask
+
     def project_framelet(
         self,
         framelet_data: np.ndarray,
@@ -487,6 +594,133 @@ class OrthographicProjector:
         self.map_green = np.zeros((map_height, map_width), dtype=np.float32)
         self.map_blue = np.zeros((map_height, map_width), dtype=np.float32)
         self.map_counts = np.zeros((map_height, map_width), dtype=np.float32)
+
+        # Pre-compute surface positions for backward sampling
+        self.surface_grid = None  # Computed on demand
+
+    def compute_surface_grid(self) -> np.ndarray:
+        """
+        Pre-compute 3D surface positions for all pixels in the output map.
+
+        This creates a map_height × map_width × 3 array where each pixel
+        corresponds to a point on Jupiter's surface in J2000 coordinates.
+
+        Returns:
+            Surface positions array (map_height, map_width, 3)
+            Positions are set to NaN where the orthographic projection
+            doesn't correspond to a visible surface point.
+        """
+        import spiceypy as spice
+
+        print(f"   Pre-computing surface grid ({self.map_height}×{self.map_width})...")
+
+        # Create pixel coordinate grid
+        yy, xx = np.meshgrid(
+            np.arange(self.map_height),
+            np.arange(self.map_width),
+            indexing='ij'
+        )
+
+        # Convert pixel coordinates to projection coordinates
+        x_proj = (xx - self.map_width / 2) * self.scale
+        y_proj = -(yy - self.map_height / 2) * self.scale  # Flip y
+
+        # Convert orthographic projection coordinates to lat/lon
+        lat0_rad = np.radians(self.center_lat)
+        lon0_rad = np.radians(self.center_lon)
+
+        # Inverse orthographic projection
+        rho = np.sqrt(x_proj**2 + y_proj**2)
+        c = np.arcsin(np.minimum(rho / self.ellipsoid.a, 1.0))
+
+        # Latitude
+        with np.errstate(divide='ignore', invalid='ignore'):
+            lat_rad = np.arcsin(
+                np.cos(c) * np.sin(lat0_rad) +
+                (y_proj * np.sin(c) * np.cos(lat0_rad)) / rho
+            )
+            # Handle center point
+            lat_rad = np.where(rho < 1e-6, lat0_rad, lat_rad)
+
+        # Longitude
+        with np.errstate(divide='ignore', invalid='ignore'):
+            lon_rad = lon0_rad + np.arctan2(
+                x_proj * np.sin(c),
+                rho * np.cos(lat0_rad) * np.cos(c) - y_proj * np.sin(lat0_rad) * np.sin(c)
+            )
+            # Handle center point
+            lon_rad = np.where(rho < 1e-6, lon0_rad, lon_rad)
+
+        # Convert to degrees
+        lat_deg = np.degrees(lat_rad)
+        lon_deg = np.degrees(lon_rad)
+
+        # Ensure longitude is in [0, 360) range
+        lon_deg = np.fmod(lon_deg, 360.0)
+        lon_deg = np.where(lon_deg < 0, lon_deg + 360.0, lon_deg)
+
+        # Mark pixels outside visible hemisphere as invalid
+        valid_mask = rho <= self.ellipsoid.a
+
+        # Convert to Cartesian J2000 coordinates
+        surface_positions = np.zeros((self.map_height, self.map_width, 3), dtype=np.float32)
+
+        # Process valid pixels
+        for i in range(self.map_height):
+            for j in range(self.map_width):
+                if valid_mask[i, j]:
+                    # Convert to Cartesian
+                    pos = self.ellipsoid.planetographic_to_cartesian(
+                        lon_deg[i, j],
+                        lat_deg[i, j],
+                        0.0,  # Altitude
+                        self.et
+                    )
+                    surface_positions[i, j] = pos
+                else:
+                    surface_positions[i, j] = np.nan
+
+        self.surface_grid = surface_positions
+        print(f"   Surface grid computed: {np.sum(valid_mask):,} valid pixels")
+
+        return surface_positions
+
+    def add_framelet_backward(
+        self,
+        framelet_projector: 'FrameletProjector',
+        framelet_data: np.ndarray,
+        color_channel: str
+    ):
+        """
+        Add framelet data to map using backward sampling (dense method).
+
+        Instead of projecting individual pixels, this samples the framelet
+        at all surface positions in the output grid.
+
+        Args:
+            framelet_projector: Initialized FrameletProjector for this framelet
+            framelet_data: Framelet image data
+            color_channel: 'red', 'green', or 'blue'
+        """
+        # Ensure surface grid is computed
+        if self.surface_grid is None:
+            self.compute_surface_grid()
+
+        # Sample framelet at all grid positions
+        pixel_values, valid_mask = framelet_projector.sample_at_surface_positions(
+            self.surface_grid,
+            framelet_data
+        )
+
+        # Accumulate into appropriate channel
+        if color_channel == 'red':
+            self.map_red += pixel_values
+        elif color_channel == 'green':
+            self.map_green += pixel_values
+        elif color_channel == 'blue':
+            self.map_blue += pixel_values
+
+        self.map_counts += valid_mask.astype(np.float32)
 
     def add_surface_point(
         self,
