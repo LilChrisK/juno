@@ -13,7 +13,7 @@ import json
 import time
 
 from spice_correction import SpiceKernelManager, JunoCamImage
-from map_projection import JupiterEllipsoid, FrameletProjector, OrthographicProjector
+from map_projection import JupiterEllipsoid, FrameletProjector, OrthographicProjector, get_junocam_fov
 from main import Framelet
 
 
@@ -160,7 +160,7 @@ def determine_map_center(junocam_img: JunoCamImage, ellipsoid: JupiterEllipsoid)
 
         if intersection is not None:
             lon, lat, alt = ellipsoid.cartesian_to_planetographic(intersection, et_middle)
-            print(f"\nMap center from boresight intersection:")
+            print("\nMap center from boresight intersection:")
             print(f"  Longitude: {lon:.2f}° W")
             print(f"  Latitude:  {lat:.2f}°")
             return lon, lat
@@ -175,7 +175,7 @@ def determine_map_center(junocam_img: JunoCamImage, ellipsoid: JupiterEllipsoid)
 
     if intersection is not None:
         lon, lat, alt = ellipsoid.cartesian_to_planetographic(intersection, et_middle)
-        print(f"\nMap center from sub-spacecraft point:")
+        print("\nMap center from sub-spacecraft point:")
         print(f"  Longitude: {lon:.2f}° W")
         print(f"  Latitude:  {lat:.2f}°")
         return lon, lat
@@ -253,6 +253,10 @@ def project_junocam_to_map(
     # Project each color channel
     print("\n5. Projecting framelets...")
 
+    # Get FOV data once (constant for all framelets)
+    print("   Loading JunoCam FOV data...")
+    fov_data = get_junocam_fov()
+
     # TEMPORARY: Only process green channel for testing
     for color in ['green']:
         framelets = framelets_by_color[color]
@@ -286,7 +290,8 @@ def project_junocam_to_map(
                     ellipsoid=ellipsoid,
                     et=et,
                     framelet_index=framelet.frame_number,
-                    color=color
+                    color=color,
+                    fov_data=fov_data
                 )
                 t1 = time.time()
                 time_init += (t1 - t0)
@@ -322,7 +327,7 @@ def project_junocam_to_map(
                 continue
 
         # Print timing summary
-        print(f"\n   Timing breakdown:")
+        print("\n   Timing breakdown:")
         print(f"     Initialization: {time_init:.2f}s")
         print(f"     Projection:     {time_project:.2f}s")
         print(f"     Accumulation:   {time_accumulate:.2f}s")

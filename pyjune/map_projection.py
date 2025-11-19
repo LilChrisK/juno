@@ -7,7 +7,7 @@ using accurate ellipsoidal geometry and SPICE-derived spacecraft state.
 
 import numpy as np
 import spiceypy as spice
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any
 from dataclasses import dataclass
 import cv2
 
@@ -148,6 +148,41 @@ class JupiterEllipsoid:
         # Normalize
         return normal / np.linalg.norm(normal)
 
+    def body_fixed_to_lonlat(self, point_body_fixed: np.ndarray) -> Tuple[float, float]:
+        """
+        Conversion from body-fixed Cartesian to lon/lat 
+        Computes planetographic longitude and latitude directly from
+        IAU_JUPITER body-fixed coordinates using ellipsoid geometry.
+
+        Args:
+            point_body_fixed: Point in IAU_JUPITER frame (km)
+
+        Returns:
+            (longitude_deg, latitude_deg)
+            - Longitude: 0-360° West
+            - Latitude: -90° to +90° (planetographic)
+        """
+        x, y, z = point_body_fixed
+
+        # Longitude: simple atan2 in body-fixed frame
+        lon_rad = np.arctan2(y, x)
+
+        # Planetographic latitude for oblate ellipsoid
+        # For point on ellipsoid, planetographic lat is angle of surface normal
+        # tan(lat) = (z/r_eq) * (a²/c²) where r_eq = sqrt(x² + y²)
+        r_eq = np.sqrt(x**2 + y**2)
+        lat_rad = np.arctan2(z * self.a**2, r_eq * self.c**2)
+
+        # Convert to degrees
+        lon_deg = np.degrees(lon_rad)
+        lat_deg = np.degrees(lat_rad)
+
+        # Ensure longitude is in [0, 360) range
+        if lon_deg < 0:
+            lon_deg += 360.0
+
+        return lon_deg, lat_deg
+
     def cartesian_to_planetographic(
         self,
         point: np.ndarray,
@@ -229,6 +264,33 @@ class JupiterEllipsoid:
         return point_j2000
 
 
+def get_junocam_fov(camera_id: int = -61500) -> Dict[str, Any]:
+    """
+    Get JunoCam field-of-view data from SPICE.
+
+    Args:
+        camera_id: NAIF ID for JunoCam (-61500)
+
+    Returns:
+        Dictionary with FOV parameters
+    """
+    shape, frame_name, boresight_inst, n, fov_bounds = spice.getfov(camera_id, 16)
+
+    # Calculate FOV extent from boundary vectors
+    # fov_bounds are unit direction vectors in instrument frame
+    # Convert to angles using atan2
+    x_angles = [np.arctan2(fov_bounds[i, 0], fov_bounds[i, 2]) for i in range(n)]
+    y_angles = [np.arctan2(fov_bounds[i, 1], fov_bounds[i, 2]) for i in range(n)]
+
+    return {
+        'boresight_inst': boresight_inst,
+        'fov_x_min_rad': min(x_angles),
+        'fov_x_max_rad': max(x_angles),
+        'fov_y_min_rad': min(y_angles),
+        'fov_y_max_rad': max(y_angles)
+    }
+
+
 class FrameletProjector:
     """
     Projects a single framelet (color band) onto Jupiter's surface.
@@ -242,7 +304,8 @@ class FrameletProjector:
         ellipsoid: JupiterEllipsoid,
         et: float,
         framelet_index: int,
-        color: str
+        color: str,
+        fov_data: Dict[str, Any]
     ):
         """
         Initialize projector for a single framelet.
@@ -252,6 +315,7 @@ class FrameletProjector:
             et: Ephemeris time of framelet exposure
             framelet_index: Frame number
             color: Color name ('red', 'green', or 'blue')
+            fov_data: FOV data from get_junocam_fov() (reused across framelets)
         """
         self.ellipsoid = ellipsoid
         self.et = et
@@ -266,20 +330,12 @@ class FrameletProjector:
         # Get camera pointing
         self.camera_rotation = spice.pxform('JUNO_JUNOCAM', 'J2000', et)
 
-        # Get FOV information from SPICE
-        shape, frame_name, boresight_inst, n, fov_bounds = spice.getfov(-61500, 16)
-        self.boresight_j2000 = self.camera_rotation @ boresight_inst
-
-        # Calculate FOV extent from boundary vectors
-        # fov_bounds are unit direction vectors in instrument frame
-        # Convert to angles using atan2
-        x_angles = [np.arctan2(fov_bounds[i, 0], fov_bounds[i, 2]) for i in range(n)]
-        y_angles = [np.arctan2(fov_bounds[i, 1], fov_bounds[i, 2]) for i in range(n)]
-
-        self.fov_x_min_rad = min(x_angles)
-        self.fov_x_max_rad = max(x_angles)
-        self.fov_y_min_rad = min(y_angles)
-        self.fov_y_max_rad = max(y_angles)
+        # Use provided FOV data
+        self.boresight_j2000 = self.camera_rotation @ fov_data['boresight_inst']
+        self.fov_x_min_rad = fov_data['fov_x_min_rad']
+        self.fov_x_max_rad = fov_data['fov_x_max_rad']
+        self.fov_y_min_rad = fov_data['fov_y_min_rad']
+        self.fov_y_max_rad = fov_data['fov_y_max_rad']
 
         # Pre-compute J2000 to IAU_JUPITER rotation for this framelet
         # (same for all pixels since they share ephemeris time)
@@ -346,23 +402,14 @@ class FrameletProjector:
         # Transform from J2000 to IAU_JUPITER (body-fixed) frame
         point_body_fixed = self.j2000_to_jupiter_rotation @ intersection
 
-        # Convert to planetographic coordinates
-        lon, lat, alt = spice.recpgr(
-            'JUPITER',
-            point_body_fixed,
-            self.ellipsoid.a,  # Equatorial radius
-            (self.ellipsoid.a - self.ellipsoid.c) / self.ellipsoid.a  # Flattening factor
-        )
-
-        # Convert from radians to degrees
-        lon_deg = np.degrees(lon)
-        lat_deg = np.degrees(lat)
+        # Convert to planetographic coordinates 
+        lon_deg, lat_deg = self.ellipsoid.body_fixed_to_lonlat(point_body_fixed)
 
         return SurfacePoint(
             position=intersection,
             longitude=lon_deg,
             latitude=lat_deg,
-            altitude=alt,
+            altitude=0.0,  # Not used in orthographic projection, set to 0
             normal=normal,
             framelet_index=self.framelet_index,
             pixel_x=pixel_x,
