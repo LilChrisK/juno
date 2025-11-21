@@ -80,8 +80,11 @@ def create_view_from_framelets(
     print(f"   Camera position: {cam_position}")
     print(f"   Distance to Jupiter: {np.linalg.norm(cam_position):,.0f} km")
 
-    # Get focal length #TODO: Source? Get from spice?
-    focal_length_pixels = 10.95637 / 0.0074
+    # Get camera intrinsics from SPICE kernels
+    focal_length_mm = spice.gdpool("INS-61500_FOCAL_LENGTH", 0, 1)[0]
+    pixel_pitch_mm = spice.gdpool("INS-61500_PIXEL_SIZE", 0, 1)[0]
+    focal_length_pixels = focal_length_mm / pixel_pitch_mm
+
     print(f"   Focal length: {focal_length_pixels:.1f} pixels")
 
     fov_data = get_junocam_fov()  # Still needed for sampling function signature
@@ -307,13 +310,15 @@ def sample_framelet_at_positions(
     # For row vectors: v_inst = v_j2000 @ cam_orient (no transpose needed!)
     rays_inst = rays @ cam_orient
 
-    # Use pinhole camera model (like Example1.py)
-    # Camera intrinsics from Util.py:
-    # fl = 10.95637/0.0074 ≈ 1480.86 pixels
-    # cx = 814.21, cy = 3.48 (for green band)
-    focal_length = 10.95637 / 0.0074
-    cx = 814.21
-    cy = 3.48  # Green band
+    # Use pinhole camera model with intrinsics from SPICE
+    # Green band NAIF ID is -61502
+    focal_length_mm = spice.gdpool("INS-61502_FOCAL_LENGTH", 0, 1)[0]
+    pixel_pitch_mm = spice.gdpool("INS-61502_PIXEL_SIZE", 0, 1)[0]
+    focal_length = focal_length_mm / pixel_pitch_mm
+
+    # Principal point for green band
+    cx = spice.gdpool("INS-61502_DISTORTION_X", 0, 1)[0]
+    cy = spice.gdpool("INS-61502_DISTORTION_Y", 0, 1)[0]
 
     # Pinhole projection: pixel = (X/Z * f, Y/Z * f) + principal_point
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -396,10 +401,17 @@ def main():
         print(f"\n   Product ID: {junocam_img.product_id}")
         print(f"   Image time: {junocam_img.image_time}")
 
-        # Get timing
+        # Get timing and apply SPICE corrections
         start_et = junocam_img.get_ephemeris_time()
         interframe_delay_str = junocam_img.metadata.get("INTERFRAME_DELAY", "0.371 <s>")
         interframe_delay = float(interframe_delay_str.split()[0])
+
+        # Apply timing corrections from SPICE instrument kernel
+        start_time_bias = spice.gdpool("INS-61500_START_TIME_BIAS", 0, 1)[0]
+        interframe_delta = spice.gdpool("INS-61500_INTERFRAME_DELTA", 0, 1)[0]
+
+        start_et += start_time_bias
+        interframe_delay += interframe_delta
 
         print(f"   Start ET: {start_et:.2f}")
         print(f"   Interframe delay: {interframe_delay:.3f} seconds")
