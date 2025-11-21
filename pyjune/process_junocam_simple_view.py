@@ -15,7 +15,9 @@ from map_projection import JupiterEllipsoid, get_junocam_fov
 from main import Framelet
 
 
-def extract_framelets(fname: Path, start_et: float = 0.0, interframe_delay: float = 0.0) -> dict:
+def extract_framelets(
+    fname: Path, start_et: float = 0.0, interframe_delay: float = 0.0
+) -> dict:
     """Extract framelets organized by color from raw JunoCam image."""
     raw = cv2.imread(str(fname), cv2.IMREAD_UNCHANGED)
     if raw is None:
@@ -54,9 +56,7 @@ def extract_framelets(fname: Path, start_et: float = 0.0, interframe_delay: floa
 
 
 def create_view_from_framelets(
-    framelets_by_color: dict,
-    ellipsoid: JupiterEllipsoid,
-    view_et: float
+    framelets_by_color: dict, ellipsoid: JupiterEllipsoid, view_et: float
 ):
     """
     Create a synthetic camera view by sampling framelets.
@@ -73,14 +73,14 @@ def create_view_from_framelets(
 
     # Get camera state at view time
     print(f"\n1. Getting camera state at ET={view_et:.2f}...")
-    state, _ = spice.spkezr('JUNO', view_et, 'J2000', 'NONE', 'JUPITER')
+    state, _ = spice.spkezr("JUNO", view_et, "J2000", "NONE", "JUPITER")
     cam_position = state[:3]
-    cam_orient = spice.pxform('JUNO_JUNOCAM', 'J2000', view_et)
+    cam_orient = spice.pxform("JUNO_JUNOCAM", "J2000", view_et)
 
     print(f"   Camera position: {cam_position}")
     print(f"   Distance to Jupiter: {np.linalg.norm(cam_position):,.0f} km")
 
-    # Get focal length #TODO: Source? Get from spice? 
+    # Get focal length #TODO: Source? Get from spice?
     focal_length_pixels = 10.95637 / 0.0074
     print(f"   Focal length: {focal_length_pixels:.1f} pixels")
 
@@ -119,13 +119,15 @@ def create_view_from_framelets(
 
     # Use the larger span and make it square with HUGE margin to ensure we get everything
     max_span = max(x_span, y_span)
-    view_size = int(max_span * 2)  
+    view_size = int(max_span * 2)
 
     # Clamp to reasonable size, prefer larger
     view_size = max(1024, min(view_size, 2048))
 
     print(f"   Jupiter center at pixel: ({x_offset}, {y_offset})")
-    print(f"   Jupiter range: X=[{x_min:.0f}, {x_max:.0f}], Y=[{y_min:.0f}, {y_max:.0f}]")
+    print(
+        f"   Jupiter range: X=[{x_min:.0f}, {x_max:.0f}], Y=[{y_min:.0f}, {y_max:.0f}]"
+    )
     print(f"   Jupiter span: {x_span:.0f} x {y_span:.0f} pixels")
     print(f"   View size: {view_size}x{view_size} pixels (4x margin, min 1024)")
 
@@ -137,11 +139,14 @@ def create_view_from_framelets(
     y = y + y_offset
 
     # Create rays in camera pixel coordinates
-    rays_camera = np.stack([
-        x.astype(np.float32),
-        y.astype(np.float32),
-        np.full((view_size, view_size), focal_length_pixels, dtype=np.float32)
-    ], axis=-1)
+    rays_camera = np.stack(
+        [
+            x.astype(np.float32),
+            y.astype(np.float32),
+            np.full((view_size, view_size), focal_length_pixels, dtype=np.float32),
+        ],
+        axis=-1,
+    )
 
     # Transform rays to J2000
     # cam_orient transforms column vectors: v_j2000 = cam_orient @ v_inst
@@ -155,7 +160,9 @@ def create_view_from_framelets(
     # Debug: test center pixel
     center_idx = view_size // 2
     center_ray = rays_j2000[center_idx, center_idx]
-    print(f"   Testing center pixel ({center_idx}, {center_idx}) -> detector pixel ({x[center_idx, center_idx]:.0f}, {y[center_idx, center_idx]:.0f})")
+    print(
+        f"   Testing center pixel ({center_idx}, {center_idx}) -> detector pixel ({x[center_idx, center_idx]:.0f}, {y[center_idx, center_idx]:.0f})"
+    )
     print(f"   Expected detector pixel for Jupiter center: ({x_offset}, {y_offset})")
     center_hit = ellipsoid.ray_intersection(cam_position, center_ray)
     print(f"   Center hit Jupiter: {center_hit is not None}")
@@ -172,66 +179,76 @@ def create_view_from_framelets(
                 hit_count += 1
 
     valid_surface = ~np.isnan(surface_positions[..., 0])
-    print(f"   Valid surface points: {np.sum(valid_surface):,} / {view_size*view_size:,} ({100*np.sum(valid_surface)/(view_size*view_size):.1f}%)")
+    print(
+        f"   Valid surface points: {np.sum(valid_surface):,} / {view_size*view_size:,} ({100*np.sum(valid_surface)/(view_size*view_size):.1f}%)"
+    )
 
     # Sample framelets at surface positions
     print("\n4. Sampling framelets...")
 
-    colors = np.zeros((view_size, view_size, 3), dtype=np.float32)
-    color_counts = np.zeros((view_size, view_size, 3), dtype=np.float32)
+    # Use single channel for grayscale output
+    gray_values = np.zeros((view_size, view_size), dtype=np.float32)
+    gray_counts = np.zeros((view_size, view_size), dtype=np.float32)
 
-    # Process green channel only for testing
-    for color_name, color_idx in [('green', 1)]:
-        framelets = framelets_by_color[color_name]
-        print(f"\n   Processing {color_name.upper()} channel ({len(framelets)} framelets)...")
+    # Process green channel only for grayscale
+    color_name = "green"
+    framelets = framelets_by_color[color_name]
+    print(
+        f"\n   Processing {color_name.upper()} channel ({len(framelets)} framelets)..."
+    )
 
-        for idx, framelet in enumerate(framelets):
-            if framelet.frame_number == 0 or framelet.frame_number >= len(framelets) - 1:
-                continue
+    for idx, framelet in enumerate(framelets):
+        if framelet.frame_number == 0 or framelet.frame_number >= len(framelets) - 1:
+            continue
 
-            # Get camera state for this framelet
-            state, _ = spice.spkezr('JUNO', framelet.et, 'J2000', 'NONE', 'JUPITER')
-            fl_cam_pos = state[:3]
-            fl_cam_orient = spice.pxform('JUNO_JUNOCAM', 'J2000', framelet.et)
+        # Get camera state for this framelet
+        state, _ = spice.spkezr("JUNO", framelet.et, "J2000", "NONE", "JUPITER")
+        fl_cam_pos = state[:3]
+        fl_cam_orient = spice.pxform("JUNO_JUNOCAM", "J2000", framelet.et)
 
-            # Sample framelet at surface positions
-            sampled, valid_mask, debug_info = sample_framelet_at_positions(
-                surface_positions,
-                framelet.data,
-                fl_cam_pos,
-                fl_cam_orient,
-                fov_data,
-                ellipsoid
+        # Sample framelet at surface positions
+        sampled, valid_mask, debug_info = sample_framelet_at_positions(
+            surface_positions,
+            framelet.data,
+            fl_cam_pos,
+            fl_cam_orient,
+            fov_data,
+            ellipsoid,
+        )
+
+        gray_values += sampled
+        gray_counts += valid_mask
+
+        if idx % 5 == 0:
+            print(
+                f"      Frame {framelet.frame_number:3d}: {np.sum(valid_mask):,} valid samples"
+            )
+            print(
+                f"        Validation: {debug_info['valid']}/{debug_info['total']} valid "
+                f"({debug_info['in_front']}/{debug_info['total']} in front, "
+                f"{debug_info['in_x']}/{debug_info['total']} in X, "
+                f"{debug_info['in_y']}/{debug_info['total']} in Y)"
+            )
+            print(
+                f"        Pixel ranges: X=[{debug_info['pixel_x_range'][0]:.1f}, {debug_info['pixel_x_range'][1]:.1f}] (valid: 0-{debug_info['framelet_size'][1]-1}), "
+                f"Y=[{debug_info['pixel_y_range'][0]:.1f}, {debug_info['pixel_y_range'][1]:.1f}] (valid: 0-{debug_info['framelet_size'][0]-1})"
             )
 
-            colors[..., 2-color_idx] += sampled  # BGR order
-            color_counts[..., 2-color_idx] += valid_mask
-
-            if idx % 5 == 0:
-                print(f"      Frame {framelet.frame_number:3d}: {np.sum(valid_mask):,} valid samples")
-                print(f"        Validation: {debug_info['valid']}/{debug_info['total']} valid "
-                      f"({debug_info['in_front']}/{debug_info['total']} in front, "
-                      f"{debug_info['in_x']}/{debug_info['total']} in X, "
-                      f"{debug_info['in_y']}/{debug_info['total']} in Y)")
-                print(f"        Pixel ranges: X=[{debug_info['pixel_x_range'][0]:.1f}, {debug_info['pixel_x_range'][1]:.1f}] (valid: 0-{debug_info['framelet_size'][1]-1}), "
-                      f"Y=[{debug_info['pixel_y_range'][0]:.1f}, {debug_info['pixel_y_range'][1]:.1f}] (valid: 0-{debug_info['framelet_size'][0]-1})")
-
     # Check if we got any valid samples
-    if color_counts.max() == 0:
+    if gray_counts.max() == 0:
         print("\n✗ No valid samples from any framelet!")
         return None
 
     # Average and normalize
-    print("\n5. Generating final image...")
-    for c in range(3):
-        mask = color_counts[..., c] > 0
-        colors[..., c][mask] /= color_counts[..., c][mask]
+    print("\n5. Generating final grayscale image...")
+    mask = gray_counts > 0
+    gray_values[mask] /= gray_counts[mask]
 
     # Normalize to 0-255
-    if colors.max() > 0:
-        colors = colors / colors.max() * 255
+    if gray_values.max() > 0:
+        gray_values = gray_values / gray_values.max() * 255
 
-    output_image = colors.astype(np.uint8)
+    output_image = gray_values.astype(np.uint8)
 
     return output_image
 
@@ -242,7 +259,7 @@ def sample_framelet_at_positions(
     cam_pos: np.ndarray,
     cam_orient: np.ndarray,
     fov_data: dict,
-    ellipsoid: JupiterEllipsoid
+    ellipsoid: JupiterEllipsoid,
 ) -> tuple:
     """
     Sample framelet at given surface positions.
@@ -264,10 +281,21 @@ def sample_framelet_at_positions(
     valid_mask = np.zeros(len(flat_pos), dtype=np.float32)
 
     if not np.any(valid_surface):
-        debug_info = {'total': 0, 'in_front': 0, 'in_x': 0, 'in_y': 0, 'valid': 0,
-                      'pixel_x_range': (0, 0), 'pixel_y_range': (0, 0),
-                      'framelet_size': (height, width)}
-        return pixel_values.reshape(output_shape), valid_mask.reshape(output_shape), debug_info
+        debug_info = {
+            "total": 0,
+            "in_front": 0,
+            "in_x": 0,
+            "in_y": 0,
+            "valid": 0,
+            "pixel_x_range": (0, 0),
+            "pixel_y_range": (0, 0),
+            "framelet_size": (height, width),
+        }
+        return (
+            pixel_values.reshape(output_shape),
+            valid_mask.reshape(output_shape),
+            debug_info,
+        )
 
     # Get valid positions
     valid_pos = flat_pos[valid_surface]
@@ -288,7 +316,7 @@ def sample_framelet_at_positions(
     cy = 3.48  # Green band
 
     # Pinhole projection: pixel = (X/Z * f, Y/Z * f) + principal_point
-    with np.errstate(divide='ignore', invalid='ignore'):
+    with np.errstate(divide="ignore", invalid="ignore"):
         pixel_x = (rays_inst[:, 0] / rays_inst[:, 2]) * focal_length + cx
         pixel_y = (rays_inst[:, 1] / rays_inst[:, 2]) * focal_length + cy
 
@@ -302,23 +330,24 @@ def sample_framelet_at_positions(
 
     # Debug - return info about why validation failed
     debug_info = {
-        'total': len(valid_pos),
-        'in_front': np.sum(in_front),
-        'in_x': np.sum(in_x_bounds),
-        'in_y': np.sum(in_y_bounds),
-        'valid': np.sum(framelet_valid),
-        'pixel_x_range': (float(pixel_x.min()), float(pixel_x.max())) if len(pixel_x) > 0 else (0, 0),
-        'pixel_y_range': (float(pixel_y.min()), float(pixel_y.max())) if len(pixel_y) > 0 else (0, 0),
-        'framelet_size': (height, width),
+        "total": len(valid_pos),
+        "in_front": np.sum(in_front),
+        "in_x": np.sum(in_x_bounds),
+        "in_y": np.sum(in_y_bounds),
+        "valid": np.sum(framelet_valid),
+        "pixel_x_range": (
+            (float(pixel_x.min()), float(pixel_x.max())) if len(pixel_x) > 0 else (0, 0)
+        ),
+        "pixel_y_range": (
+            (float(pixel_y.min()), float(pixel_y.max())) if len(pixel_y) > 0 else (0, 0)
+        ),
+        "framelet_size": (height, width),
     }
 
     if np.any(framelet_valid):
         # Interpolate
         interp_func = RectBivariateSpline(
-            np.arange(height),
-            np.arange(width),
-            framelet_data,
-            kx=1, ky=1
+            np.arange(height), np.arange(width), framelet_data, kx=1, ky=1
         )
 
         valid_px = pixel_x[framelet_valid]
@@ -335,7 +364,11 @@ def sample_framelet_at_positions(
         pixel_values[valid_surface] = temp_values
         valid_mask[valid_surface] = temp_valid
 
-    return pixel_values.reshape(output_shape), valid_mask.reshape(output_shape), debug_info
+    return (
+        pixel_values.reshape(output_shape),
+        valid_mask.reshape(output_shape),
+        debug_info,
+    )
 
 
 def main():
@@ -355,7 +388,9 @@ def main():
 
         # Load image
         print("\n3. Loading image metadata...")
-        fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")
+        # fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")
+        # fname = Path("images/raw/JNCE_2021159_34C00055_V01-raw.png")
+        fname = Path("images/raw/JNCE_2021159_34C00048_V01-raw.png")
         junocam_img = JunoCamImage(fname)
 
         print(f"\n   Product ID: {junocam_img.product_id}")
@@ -374,7 +409,7 @@ def main():
         framelets_by_color = extract_framelets(fname, start_et, interframe_delay)
 
         # Always use the middle frame
-        num_frames = len(framelets_by_color['green'])
+        num_frames = len(framelets_by_color["green"])
         view_frame_idx = num_frames // 2
         view_et = start_et + view_frame_idx * interframe_delay
 
@@ -383,9 +418,7 @@ def main():
 
         # Create view
         output_image = create_view_from_framelets(
-            framelets_by_color,
-            ellipsoid,
-            view_et
+            framelets_by_color, ellipsoid, view_et
         )
 
         if output_image is not None:

@@ -252,7 +252,7 @@ def main():
                 range_km = spice.vnorm(state[:3])
                 print(f"   Range to Jupiter: {range_km:.1f} km")
             except:
-                print(f"   (Could not query spacecraft state)")
+                print("   (Could not query spacecraft state)")
 
         # Create debug visualization
         print("\n4. Creating debug visualization...")
