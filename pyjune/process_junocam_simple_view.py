@@ -245,66 +245,82 @@ def create_view_from_framelets(
     # Sample framelets at surface positions
     print("\n5. Sampling framelets...")
 
-    # Use single channel for grayscale output
-    gray_values = np.zeros((view_size, view_size), dtype=np.float32)
-    gray_counts = np.zeros((view_size, view_size), dtype=np.float32)
+    # Create arrays for RGB channels
+    rgb_values = np.zeros((view_size, view_size, 3), dtype=np.float32)
+    rgb_counts = np.zeros((view_size, view_size, 3), dtype=np.float32)
 
-    # Process green channel only for grayscale
-    color_name = "green"
-    framelets = framelets_by_color[color_name]
-    print(
-        f"\n   Processing {color_name.upper()} channel ({len(framelets)} framelets)..."
-    )
+    # Process all three color channels
+    color_names = ["red", "green", "blue"]
+    color_indices = {"red": 0, "green": 1, "blue": 2}
 
-    for idx, framelet in enumerate(framelets):
-        if framelet.frame_number == 0 or framelet.frame_number >= len(framelets) - 1:
-            continue
-
-        # Sample framelet at surface positions using precomputed camera state
-        sampled, valid_mask, debug_info = sample_framelet_at_positions(
-            surface_positions,
-            framelet.data,
-            framelet.cam_position,
-            framelet.cam_orient,
-            fov_data,
-            ellipsoid,
+    for color_name in color_names:
+        framelets = framelets_by_color[color_name]
+        channel_idx = color_indices[color_name]
+        print(
+            f"\n   Processing {color_name.upper()} channel ({len(framelets)} framelets)..."
         )
 
-        gray_values += sampled
-        gray_counts += valid_mask
+        for idx, framelet in enumerate(framelets):
+            if framelet.frame_number == 0 or framelet.frame_number >= len(framelets) - 1:
+                continue
 
-        if idx % 5 == 0:
-            print(
-                f"      Frame {framelet.frame_number:3d}: {np.sum(valid_mask):,} valid samples"
-            )
-            print(
-                f"        Validation: {debug_info['valid']}/{debug_info['total']} valid "
-                f"({debug_info['in_front']}/{debug_info['total']} in front, "
-                f"{debug_info['in_x']}/{debug_info['total']} in X, "
-                f"{debug_info['in_y']}/{debug_info['total']} in Y)"
-            )
-            print(
-                f"        Pixel ranges: X=[{debug_info['pixel_x_range'][0]:.1f}, {debug_info['pixel_x_range'][1]:.1f}] (valid: 0-{debug_info['framelet_size'][1]-1}), "
-                f"Y=[{debug_info['pixel_y_range'][0]:.1f}, {debug_info['pixel_y_range'][1]:.1f}] (valid: 0-{debug_info['framelet_size'][0]-1})"
+            # Sample framelet at surface positions using precomputed camera state
+            sampled, valid_mask, debug_info = sample_framelet_at_positions(
+                surface_positions,
+                framelet.data,
+                framelet.cam_position,
+                framelet.cam_orient,
+                fov_data,
+                ellipsoid,
+                color=color_name,
             )
 
-    # Check if we got any valid samples
-    if gray_counts.max() == 0:
+            rgb_values[:, :, channel_idx] += sampled
+            rgb_counts[:, :, channel_idx] += valid_mask
+
+            if idx % 5 == 0:
+                print(
+                    f"      Frame {framelet.frame_number:3d}: {np.sum(valid_mask):,} valid samples"
+                )
+                print(
+                    f"        Validation: {debug_info['valid']}/{debug_info['total']} valid "
+                    f"({debug_info['in_front']}/{debug_info['total']} in front, "
+                    f"{debug_info['in_x']}/{debug_info['total']} in X, "
+                    f"{debug_info['in_y']}/{debug_info['total']} in Y)"
+                )
+                print(
+                    f"        Pixel ranges: X=[{debug_info['pixel_x_range'][0]:.1f}, {debug_info['pixel_x_range'][1]:.1f}] (valid: 0-{debug_info['framelet_size'][1]-1}), "
+                    f"Y=[{debug_info['pixel_y_range'][0]:.1f}, {debug_info['pixel_y_range'][1]:.1f}] (valid: 0-{debug_info['framelet_size'][0]-1})"
+                )
+
+    # Check if we got any valid samples in any channel
+    if rgb_counts.max() == 0:
         print("\n✗ No valid samples from any framelet!")
-        return None
+        return None, None, None, None
 
-    # Average and normalize
-    print("\n6. Generating final grayscale image...")
-    mask = gray_counts > 0
-    gray_values[mask] /= gray_counts[mask]
+    # Average each channel independently
+    print("\n6. Generating final RGB image...")
+    for channel_idx in range(3):
+        mask = rgb_counts[:, :, channel_idx] > 0
+        rgb_values[mask, channel_idx] /= rgb_counts[mask, channel_idx]
 
-    # Normalize to 0-255
-    if gray_values.max() > 0:
-        gray_values = gray_values / gray_values.max() * 255
+    # Normalize each channel independently to 0-255
+    rgb_normalized = np.zeros((view_size, view_size, 3), dtype=np.uint8)
+    for channel_idx in range(3):
+        channel_data = rgb_values[:, :, channel_idx]
+        if channel_data.max() > 0:
+            normalized = channel_data / channel_data.max() * 255
+            rgb_normalized[:, :, channel_idx] = normalized.astype(np.uint8)
 
-    output_image = gray_values.astype(np.uint8)
+    # Create RGB composite (OpenCV uses BGR format)
+    output_rgb = cv2.cvtColor(rgb_normalized, cv2.COLOR_RGB2BGR)
 
-    return output_image
+    # Extract individual channels
+    output_red = rgb_normalized[:, :, 0]
+    output_green = rgb_normalized[:, :, 1]
+    output_blue = rgb_normalized[:, :, 2]
+
+    return output_rgb, output_red, output_green, output_blue
 
 
 def sample_framelet_at_positions(
@@ -314,13 +330,27 @@ def sample_framelet_at_positions(
     cam_orient: np.ndarray,
     fov_data: dict,
     ellipsoid: JupiterEllipsoid,
+    color: str = "green",
 ) -> tuple:
     """
     Sample framelet at given surface positions.
 
+    Args:
+        surface_positions: Surface positions to sample (view_size x view_size x 3)
+        framelet_data: Framelet pixel data (height x width)
+        cam_pos: Camera position in IAU_JUPITER frame
+        cam_orient: Camera orientation matrix (JUNO_JUNOCAM -> IAU_JUPITER)
+        fov_data: FOV data (for compatibility, not used)
+        ellipsoid: Jupiter ellipsoid model
+        color: Color band ('red', 'green', or 'blue')
+
     Returns:
-        (pixel_values, valid_mask)
+        (pixel_values, valid_mask, debug_info)
     """
+    # Map color to NAIF ID
+    color_to_naif = {"red": -61503, "green": -61502, "blue": -61501}
+    naif_id = color_to_naif.get(color.lower(), -61502)
+
     height, width = framelet_data.shape
     output_shape = surface_positions.shape[:-1]
 
@@ -362,14 +392,14 @@ def sample_framelet_at_positions(
     rays_inst = rays @ cam_orient
 
     # Use pinhole camera model with intrinsics from SPICE
-    # Green band NAIF ID is -61502
-    focal_length_mm = spice.gdpool("INS-61502_FOCAL_LENGTH", 0, 1)[0]
-    pixel_pitch_mm = spice.gdpool("INS-61502_PIXEL_SIZE", 0, 1)[0]
+    # Query band-specific parameters using NAIF ID
+    focal_length_mm = spice.gdpool(f"INS{naif_id}_FOCAL_LENGTH", 0, 1)[0]
+    pixel_pitch_mm = spice.gdpool(f"INS{naif_id}_PIXEL_SIZE", 0, 1)[0]
     focal_length = focal_length_mm / pixel_pitch_mm
 
-    # Principal point for green band
-    cx = spice.gdpool("INS-61502_DISTORTION_X", 0, 1)[0]
-    cy = spice.gdpool("INS-61502_DISTORTION_Y", 0, 1)[0]
+    # Principal point for this color band
+    cx = spice.gdpool(f"INS{naif_id}_DISTORTION_X", 0, 1)[0]
+    cy = spice.gdpool(f"INS{naif_id}_DISTORTION_Y", 0, 1)[0]
 
     # Pinhole projection: pixel = (X/Z * f, Y/Z * f) + principal_point
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -444,9 +474,9 @@ def main():
 
         # Load image
         print("\n3. Loading image metadata...")
-        # fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")
+        fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")
         # fname = Path("images/raw/JNCE_2021159_34C00055_V01-raw.png")
-        fname = Path("images/raw/JNCE_2021159_34C00048_V01-raw.png")
+        # fname = Path("images/raw/JNCE_2021159_34C00048_V01-raw.png")
         junocam_img = JunoCamImage(fname)
 
         print(f"\n   Product ID: {junocam_img.product_id}")
@@ -480,17 +510,32 @@ def main():
         print(f"   View ET: {reference_framelet.et:.2f}")
 
         # Create view
-        output_image = create_view_from_framelets(
+        output_rgb, output_red, output_green, output_blue = create_view_from_framelets(
             framelets_by_color, ellipsoid, reference_framelet
         )
 
-        if output_image is not None:
-            # Save
+        if output_rgb is not None:
+            # Save all outputs
             output_dir = Path("images/processed/simple")
             output_dir.mkdir(parents=True, exist_ok=True)
-            output_file = output_dir / f"{junocam_img.product_id}_simple_view.png"
-            cv2.imwrite(str(output_file), output_image)
-            print(f"\n✓ Saved: {output_file}")
+
+            # Save RGB composite
+            rgb_file = output_dir / f"{junocam_img.product_id}_simple_view_rgb.png"
+            cv2.imwrite(str(rgb_file), output_rgb)
+            print(f"\n✓ Saved RGB composite: {rgb_file}")
+
+            # Save individual channels
+            red_file = output_dir / f"{junocam_img.product_id}_simple_view_red.png"
+            cv2.imwrite(str(red_file), output_red)
+            print(f"✓ Saved red channel: {red_file}")
+
+            green_file = output_dir / f"{junocam_img.product_id}_simple_view_green.png"
+            cv2.imwrite(str(green_file), output_green)
+            print(f"✓ Saved green channel: {green_file}")
+
+            blue_file = output_dir / f"{junocam_img.product_id}_simple_view_blue.png"
+            cv2.imwrite(str(blue_file), output_blue)
+            print(f"✓ Saved blue channel: {blue_file}")
         else:
             print("\n✗ Could not create view - Jupiter not visible in selected frame")
 

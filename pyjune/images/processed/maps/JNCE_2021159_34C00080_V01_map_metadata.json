@@ -1,0 +1,16 @@
+{
+  "product_id": "JNCE_2021159_34C00080_V01",
+  "projection": "orthographic",
+  "center_longitude_deg": 352.86574856728754,
+  "center_latitude_deg": -61.42666289683766,
+  "map_width_pixels": 2048,
+  "map_height_pixels": 2048,
+  "scale_km_per_pixel": 104.724609375,
+  "ellipsoid_radii_km": {
+    "equatorial_a": 71492.0,
+    "equatorial_b": 71492.0,
+    "polar_c": 66854.0
+  },
+  "sample_step": 1,
+  "spacecraft_range_km": 155210.8133729395
+}
