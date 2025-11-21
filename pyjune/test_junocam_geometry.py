@@ -6,6 +6,7 @@ import spiceypy as spice
 import numpy as np
 from spice_correction import SpiceKernelManager
 
+
 def explore_junocam_geometry():
     """Explore JunoCam camera geometry from IK kernel."""
 
@@ -32,21 +33,27 @@ def explore_junocam_geometry():
 
         print(f"\nFOV Boundary Vectors (first 10):")
         for i in range(min(10, n_bounds)):
-            print(f"  [{i:2d}]: [{bounds[i,0]:8.5f}, {bounds[i,1]:8.5f}, {bounds[i,2]:8.5f}]")
+            print(
+                f"  [{i:2d}]: [{bounds[i,0]:8.5f}, {bounds[i,1]:8.5f}, {bounds[i,2]:8.5f}]"
+            )
 
         # Calculate FOV angles
         print(f"\nFOV Angular Extent:")
         # Cross-track (X direction)
-        x_angles = [np.arctan2(bounds[i,0], bounds[i,2]) for i in range(n_bounds)]
+        x_angles = [np.arctan2(bounds[i, 0], bounds[i, 2]) for i in range(n_bounds)]
         x_min = np.degrees(min(x_angles))
         x_max = np.degrees(max(x_angles))
-        print(f"  Cross-track (X): {x_min:.2f}° to {x_max:.2f}° (total: {x_max-x_min:.2f}°)")
+        print(
+            f"  Cross-track (X): {x_min:.2f}° to {x_max:.2f}° (total: {x_max-x_min:.2f}°)"
+        )
 
         # Along-track (Y direction)
-        y_angles = [np.arctan2(bounds[i,1], bounds[i,2]) for i in range(n_bounds)]
+        y_angles = [np.arctan2(bounds[i, 1], bounds[i, 2]) for i in range(n_bounds)]
         y_min = np.degrees(min(y_angles))
         y_max = np.degrees(max(y_angles))
-        print(f"  Along-track (Y): {y_min:.2f}° to {y_max:.2f}° (total: {y_max-y_min:.2f}°)")
+        print(
+            f"  Along-track (Y): {y_min:.2f}° to {y_max:.2f}° (total: {y_max-y_min:.2f}°)"
+        )
 
         # Try to get specific camera parameters from kernel pool
         print("\n2. Camera Parameters from Kernel Pool:")
@@ -54,28 +61,28 @@ def explore_junocam_geometry():
 
         try:
             # INS-61500_PIXEL_SAMPLES (width)
-            pixel_samples = int(spice.gdpool(f'INS{camid}_PIXEL_SAMPLES', 0, 1)[0])
+            pixel_samples = int(spice.gdpool(f"INS{camid}_PIXEL_SAMPLES", 0, 1)[0])
             print(f"Pixel samples (width): {pixel_samples}")
         except:
             print("Pixel samples: Not available")
 
         try:
             # INS-61500_PIXEL_LINES (height per framelet)
-            pixel_lines = int(spice.gdpool(f'INS{camid}_PIXEL_LINES', 0, 1)[0])
+            pixel_lines = int(spice.gdpool(f"INS{camid}_PIXEL_LINES", 0, 1)[0])
             print(f"Pixel lines (height): {pixel_lines}")
         except:
             print("Pixel lines: Not available")
 
         try:
             # Pixel size
-            pixel_size = spice.gdpool(f'INS{camid}_PIXEL_SIZE', 0, 1)[0]
+            pixel_size = spice.gdpool(f"INS{camid}_PIXEL_SIZE", 0, 1)[0]
             print(f"Pixel size: {pixel_size} mm")
         except:
             print("Pixel size: Not available")
 
         try:
             # Focal length
-            focal_length = spice.gdpool(f'INS{camid}_FOCAL_LENGTH', 0, 1)[0]
+            focal_length = spice.gdpool(f"INS{camid}_FOCAL_LENGTH", 0, 1)[0]
             print(f"Focal length: {focal_length} mm")
 
             # Calculate pixel angular size
@@ -88,16 +95,18 @@ def explore_junocam_geometry():
 
         try:
             # CCD center
-            ccd_center = spice.gdpool(f'INS{camid}_CCD_CENTER', 0, 2)
+            ccd_center = spice.gdpool(f"INS{camid}_CCD_CENTER", 0, 2)
             print(f"CCD center: {ccd_center}")
         except:
             print("CCD center: Not available")
 
         try:
             # Boresight sample/line
-            boresight_sample = spice.gdpool(f'INS{camid}_BORESIGHT_SAMPLE', 0, 1)[0]
-            boresight_line = spice.gdpool(f'INS{camid}_BORESIGHT_LINE', 0, 1)[0]
-            print(f"Boresight pixel: (sample={boresight_sample}, line={boresight_line})")
+            boresight_sample = spice.gdpool(f"INS{camid}_BORESIGHT_SAMPLE", 0, 1)[0]
+            boresight_line = spice.gdpool(f"INS{camid}_BORESIGHT_LINE", 0, 1)[0]
+            print(
+                f"Boresight pixel: (sample={boresight_sample}, line={boresight_line})"
+            )
         except:
             print("Boresight pixel: Not available")
 
@@ -125,7 +134,9 @@ def explore_junocam_geometry():
         print("  - 1D detector array with {pixel_samples} pixels wide")
         print("  - Sweeps across the scene as spacecraft moves")
         print("  - Each 'line' is captured at a different time")
-        print("  - FOV is primarily cross-track (wide) with small along-track extent per line")
+        print(
+            "  - FOV is primarily cross-track (wide) with small along-track extent per line"
+        )
 
         # The key insight: for a single framelet line,
         # X position maps to cross-track angle

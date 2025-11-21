@@ -94,13 +94,17 @@ def create_view_from_framelets(
 
     print(f"   Focal length: {focal_length_pixels:.1f} pixels")
 
-    fov_data = get_junocam_fov()  # Still needed for sampling function signature
-
     # Use the raw framelet dimensions directly
     print("   Calculating view size from framelet dimensions...")
 
     green_framelets = framelets_by_color["green"]
-    num_framelets = len([f for f in green_framelets if f.frame_number > 0 and f.frame_number < len(green_framelets) - 1])
+    num_framelets = len(
+        [
+            f
+            for f in green_framelets
+            if f.frame_number > 0 and f.frame_number < len(green_framelets) - 1
+        ]
+    )
 
     framelet_width = green_framelets[0].data.shape[1]  # 1648
     framelet_height = green_framelets[0].data.shape[0]  # 128
@@ -109,7 +113,9 @@ def create_view_from_framelets(
     total_height = num_framelets * framelet_height
 
     # Use larger dimension for square output, with MORE margin
-    view_size = int(max(framelet_width, total_height) * 2.0)  # Increased from 1.5 to 2.0
+    view_size = int(
+        max(framelet_width, total_height) * 2.0
+    )  # Increased from 1.5 to 2.0
 
     # Clamp to reasonable size
     view_size = max(512, min(view_size, 4096))
@@ -132,16 +138,19 @@ def create_view_from_framelets(
     search_half = search_size / 2
 
     y_sample, x_sample = np.mgrid[
-        cy - search_half:cy + search_half:sample_size*1j,
-        cx - search_half:cx + search_half:sample_size*1j
+        cy - search_half : cy + search_half : sample_size * 1j,
+        cx - search_half : cx + search_half : sample_size * 1j,
     ]
 
     # Create rays for sampling
-    rays_sample = np.stack([
-        x_sample.astype(np.float32),
-        y_sample.astype(np.float32),
-        np.full((sample_size, sample_size), focal_length_pixels, dtype=np.float32),
-    ], axis=-1)
+    rays_sample = np.stack(
+        [
+            x_sample.astype(np.float32),
+            y_sample.astype(np.float32),
+            np.full((sample_size, sample_size), focal_length_pixels, dtype=np.float32),
+        ],
+        axis=-1,
+    )
 
     # Transform to Jupiter frame
     rays_jupiter_sample = rays_sample @ cam_orient.T
@@ -163,10 +172,10 @@ def create_view_from_framelets(
         x_min = x_sample[0, hit_cols.min()]
         x_max = x_sample[0, hit_cols.max()]
 
-        # Add padding 
+        # Add padding
         y_range = y_max - y_min
         x_range = x_max - x_min
-        padding = 0.05 # %
+        padding = 0.05  # %
 
         y_min -= y_range * padding
         y_max += y_range * padding
@@ -183,9 +192,13 @@ def create_view_from_framelets(
         x_start = x_center - half_size
         x_end = x_center + half_size
 
-        print(f"   Jupiter extent: X=[{x_min:.0f}, {x_max:.0f}], Y=[{y_min:.0f}, {y_max:.0f}]")
+        print(
+            f"   Jupiter extent: X=[{x_min:.0f}, {x_max:.0f}], Y=[{y_min:.0f}, {y_max:.0f}]"
+        )
         print(f"   View center: ({x_center:.0f}, {y_center:.0f})")
-        print(f"   View bounds: X=[{x_start:.0f}, {x_end:.0f}], Y=[{y_start:.0f}, {y_end:.0f}]")
+        print(
+            f"   View bounds: X=[{x_start:.0f}, {x_end:.0f}], Y=[{y_start:.0f}, {y_end:.0f}]"
+        )
     else:
         # Fallback to centered view if Jupiter not found in sampling
         print("   Warning: Jupiter not found in coarse sampling, using centered view")
@@ -196,7 +209,7 @@ def create_view_from_framelets(
         y_end = cy + half_size
 
     print(f"\n3. Creating {view_size}x{view_size} view grid...")
-    y, x = np.mgrid[y_start:y_end:view_size*1j, x_start:x_end:view_size*1j]
+    y, x = np.mgrid[y_start : y_end : view_size * 1j, x_start : x_end : view_size * 1j]
 
     # Create rays in camera pixel coordinates
     rays_camera = np.stack(
@@ -261,7 +274,10 @@ def create_view_from_framelets(
         )
 
         for idx, framelet in enumerate(framelets):
-            if framelet.frame_number == 0 or framelet.frame_number >= len(framelets) - 1:
+            if (
+                framelet.frame_number == 0
+                or framelet.frame_number >= len(framelets) - 1
+            ):
                 continue
 
             # Sample framelet at surface positions using precomputed camera state
@@ -270,8 +286,6 @@ def create_view_from_framelets(
                 framelet.data,
                 framelet.cam_position,
                 framelet.cam_orient,
-                fov_data,
-                ellipsoid,
                 color=color_name,
             )
 
@@ -328,8 +342,6 @@ def sample_framelet_at_positions(
     framelet_data: np.ndarray,
     cam_pos: np.ndarray,
     cam_orient: np.ndarray,
-    fov_data: dict,
-    ellipsoid: JupiterEllipsoid,
     color: str = "green",
 ) -> tuple:
     """
@@ -340,7 +352,6 @@ def sample_framelet_at_positions(
         framelet_data: Framelet pixel data (height x width)
         cam_pos: Camera position in IAU_JUPITER frame
         cam_orient: Camera orientation matrix (JUNO_JUNOCAM -> IAU_JUPITER)
-        fov_data: FOV data (for compatibility, not used)
         ellipsoid: Jupiter ellipsoid model
         color: Color band ('red', 'green', or 'blue')
 

@@ -13,11 +13,18 @@ import json
 import time
 
 from spice_correction import SpiceKernelManager, JunoCamImage
-from map_projection import JupiterEllipsoid, FrameletProjector, OrthographicProjector, get_junocam_fov
+from map_projection import (
+    JupiterEllipsoid,
+    FrameletProjector,
+    OrthographicProjector,
+    get_junocam_fov,
+)
 from main import Framelet
 
 
-def extract_framelets(fname: Path, start_et: float = 0.0, interframe_delay: float = 0.0) -> dict:
+def extract_framelets(
+    fname: Path, start_et: float = 0.0, interframe_delay: float = 0.0
+) -> dict:
     """
     Extract framelets organized by color from raw JunoCam image.
 
@@ -79,7 +86,9 @@ def extract_framelets(fname: Path, start_et: float = 0.0, interframe_delay: floa
     return framelets_by_color
 
 
-def determine_map_center(junocam_img: JunoCamImage, ellipsoid: JupiterEllipsoid) -> tuple:
+def determine_map_center(
+    junocam_img: JunoCamImage, ellipsoid: JupiterEllipsoid
+) -> tuple:
     """
     Determine center point for orthographic projection.
 
@@ -117,12 +126,12 @@ def determine_map_center(junocam_img: JunoCamImage, ellipsoid: JupiterEllipsoid)
         et_middle = et
 
     # Get spacecraft position
-    state, _ = spice.spkezr('JUNO', et_middle, 'J2000', 'NONE', 'JUPITER')
+    state, _ = spice.spkezr("JUNO", et_middle, "J2000", "NONE", "JUPITER")
     sc_position = state[:3]
 
     # Get camera boresight
     try:
-        rotation = spice.pxform('JUNO_JUNOCAM', 'J2000', et_middle)
+        rotation = spice.pxform("JUNO_JUNOCAM", "J2000", et_middle)
         shape, frame_name, boresight_inst, n, fov_bounds = spice.getfov(-61500, 16)
         boresight_j2000 = rotation @ boresight_inst
 
@@ -130,7 +139,9 @@ def determine_map_center(junocam_img: JunoCamImage, ellipsoid: JupiterEllipsoid)
         intersection = ellipsoid.ray_intersection(sc_position, boresight_j2000)
 
         if intersection is not None:
-            lon, lat, alt = ellipsoid.cartesian_to_planetographic(intersection, et_middle)
+            lon, lat, alt = ellipsoid.cartesian_to_planetographic(
+                intersection, et_middle
+            )
             print("\nMap center from boresight intersection:")
             print(f"  Longitude: {lon:.2f}° W")
             print(f"  Latitude:  {lat:.2f}°")
@@ -200,7 +211,8 @@ def project_junocam_to_map(
 
     # Estimate scale based on range
     import spiceypy as spice
-    state, _ = spice.spkezr('JUNO', start_et, 'J2000', 'NONE', 'JUPITER')
+
+    state, _ = spice.spkezr("JUNO", start_et, "J2000", "NONE", "JUPITER")
     range_km = np.linalg.norm(state[:3])
 
     # Scale to show ~1.5x Jupiter diameter in frame
@@ -217,7 +229,7 @@ def project_junocam_to_map(
         et=start_et,
         map_width=map_size,
         map_height=map_size,
-        scale_km_per_pixel=scale_km_per_pixel
+        scale_km_per_pixel=scale_km_per_pixel,
     )
 
     # Project each color channel using BACKWARD SAMPLING
@@ -228,9 +240,11 @@ def project_junocam_to_map(
     fov_data = get_junocam_fov()
 
     # TEMPORARY: Only process green channel for testing
-    for color in ['green']:
+    for color in ["green"]:
         framelets = framelets_by_color[color]
-        print(f"\n   Processing {color.upper()} channel ({len(framelets)} framelets)...")
+        print(
+            f"\n   Processing {color.upper()} channel ({len(framelets)} framelets)..."
+        )
 
         # Timing benchmarks
         time_init = 0.0
@@ -238,7 +252,10 @@ def project_junocam_to_map(
 
         for idx, framelet in enumerate(framelets):
             # Skip incomplete first and last frames
-            if framelet.frame_number == 0 or framelet.frame_number >= len(framelets) - 1:
+            if (
+                framelet.frame_number == 0
+                or framelet.frame_number >= len(framelets) - 1
+            ):
                 continue
 
             frame_start = time.time()
@@ -251,24 +268,27 @@ def project_junocam_to_map(
                     et=framelet.et,
                     framelet_index=framelet.frame_number,
                     color=color,
-                    fov_data=fov_data
+                    fov_data=fov_data,
                 )
                 t1 = time.time()
-                time_init += (t1 - t0)
+                time_init += t1 - t0
 
                 # Use backward sampling: sample framelet at all map positions
                 t0 = time.time()
                 projector.add_framelet_backward(fp, framelet.data, color)
                 t1 = time.time()
-                time_sample += (t1 - t0)
+                time_sample += t1 - t0
 
                 frame_elapsed = time.time() - frame_start
                 if idx % 5 == 0:
-                    print(f"      Frame {framelet.frame_number:3d}: {frame_elapsed:.2f}s")
+                    print(
+                        f"      Frame {framelet.frame_number:3d}: {frame_elapsed:.2f}s"
+                    )
 
             except Exception as e:
                 print(f"      Frame {framelet.frame_number:3d}: ERROR - {e}")
                 import traceback
+
                 traceback.print_exc()
                 continue
 

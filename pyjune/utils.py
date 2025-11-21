@@ -33,7 +33,7 @@ def create_debug_visualization(fname, output_path):
     frame_height = band_height * bands
     frames = height // frame_height
 
-    color_map = {0: 'BLUE', 1: 'GREEN', 2: 'RED'}
+    color_map = {0: "BLUE", 1: "GREEN", 2: "RED"}
 
     # Draw frame separators (red) and band separators (blue)
     for f in range(frames + 1):
@@ -63,19 +63,30 @@ def create_debug_visualization(fname, output_path):
             thickness = 2
 
             # Get text size for background
-            (text_width, text_height), baseline = cv2.getTextSize(label, font, font_scale, thickness)
+            (text_width, text_height), baseline = cv2.getTextSize(
+                label, font, font_scale, thickness
+            )
 
             # Draw black background rectangle
-            cv2.rectangle(debug_img,
-                         (10, y_center - text_height - 5),
-                         (10 + text_width + 10, y_center + 5),
-                         (0, 0, 0), -1)
+            cv2.rectangle(
+                debug_img,
+                (10, y_center - text_height - 5),
+                (10 + text_width + 10, y_center + 5),
+                (0, 0, 0),
+                -1,
+            )
 
             # Draw text
-            cv2.putText(debug_img, label, (15, y_center),
-                       font, font_scale, (255, 255, 255), thickness)
+            cv2.putText(
+                debug_img,
+                label,
+                (15, y_center),
+                font,
+                font_scale,
+                (255, 255, 255),
+                thickness,
+            )
 
     # Save debug image
     cv2.imwrite(str(output_path), debug_img)
     print(f"Debug visualization saved to {output_path}")
-
