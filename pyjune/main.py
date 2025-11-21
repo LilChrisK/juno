@@ -25,6 +25,8 @@ class Framelet:
     color_index: int  # 0=blue, 1=green, 2=red
     data: np.ndarray
     et: float = 0.0  # Ephemeris time for this framelet
+    cam_position: np.ndarray = None  # Camera position in IAU_JUPITER frame
+    cam_orient: np.ndarray = None  # Camera orientation matrix (JUNOCAM->IAU_JUPITER)
 
     @property
     def height(self) -> int:
@@ -248,7 +250,7 @@ def main():
 
             # Get spacecraft state
             try:
-                state, _ = spice.spkezr("JUNO", et, "J2000", "NONE", "JUPITER")
+                state, _ = spice.spkezr("JUNO", et, "IAU_JUPITER", "NONE", "JUPITER")
                 range_km = spice.vnorm(state[:3])
                 print(f"   Range to Jupiter: {range_km:.1f} km")
             except:

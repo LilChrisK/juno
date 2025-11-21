@@ -39,6 +39,12 @@ def extract_framelets(
     for frame_idx in range(num_frames):
         frame_et = start_et + frame_idx * interframe_delay
 
+        # Compute camera state and orientation for this frame
+        # Use IAU_JUPITER frame so surface features stay at fixed coordinates over time
+        state, _ = spice.spkezr("JUNO", frame_et, "IAU_JUPITER", "NONE", "JUPITER")
+        cam_pos = state[:3]
+        cam_orient = spice.pxform("JUNO_JUNOCAM", "IAU_JUPITER", frame_et)
+
         for color_idx in range(bands):
             base_row = frame_idx * frame_height + color_idx * band_height
             framelet_data = raw[base_row : base_row + band_height, :]
@@ -49,6 +55,8 @@ def extract_framelets(
                 color_index=color_idx,
                 data=framelet_data.copy(),
                 et=frame_et,
+                cam_position=cam_pos,
+                cam_orient=cam_orient,
             )
             framelets_by_color[framelet.color].append(framelet)
 
@@ -56,7 +64,7 @@ def extract_framelets(
 
 
 def create_view_from_framelets(
-    framelets_by_color: dict, ellipsoid: JupiterEllipsoid, view_et: float
+    framelets_by_color: dict, ellipsoid: JupiterEllipsoid, reference_framelet
 ):
     """
     Create a synthetic camera view by sampling framelets.
@@ -65,17 +73,16 @@ def create_view_from_framelets(
     Args:
         framelets_by_color: Dictionary of framelets by color
         ellipsoid: Jupiter ellipsoid
-        view_et: Ephemeris time for view (typically middle frame)
+        reference_framelet: Framelet to use for view geometry (typically middle frame)
     """
     print("\n" + "=" * 70)
     print("CREATING SYNTHETIC VIEW")
     print("=" * 70)
 
-    # Get camera state at view time
-    print(f"\n1. Getting camera state at ET={view_et:.2f}...")
-    state, _ = spice.spkezr("JUNO", view_et, "J2000", "NONE", "JUPITER")
-    cam_position = state[:3]
-    cam_orient = spice.pxform("JUNO_JUNOCAM", "J2000", view_et)
+    # Use precomputed camera state from reference framelet
+    print(f"\n1. Getting camera state at ET={reference_framelet.et:.2f}...")
+    cam_position = reference_framelet.cam_position
+    cam_orient = reference_framelet.cam_orient
 
     print(f"   Camera position: {cam_position}")
     print(f"   Distance to Jupiter: {np.linalg.norm(cam_position):,.0f} km")
@@ -151,10 +158,10 @@ def create_view_from_framelets(
         axis=-1,
     )
 
-    # Transform rays to J2000
-    # cam_orient transforms column vectors: v_j2000 = cam_orient @ v_inst
-    # For row vectors, we need to transpose: v_j2000 = v_inst @ cam_orient.T
-    rays_j2000 = rays_camera @ cam_orient.T
+    # Transform rays to IAU_JUPITER frame
+    # cam_orient transforms column vectors: v_jupiter = cam_orient @ v_inst
+    # For row vectors, we need to transpose: v_jupiter = v_inst @ cam_orient.T
+    rays_jupiter = rays_camera @ cam_orient.T
 
     # Project rays onto Jupiter surface
     print("\n3. Projecting rays onto Jupiter surface...")
@@ -162,7 +169,7 @@ def create_view_from_framelets(
 
     # Debug: test center pixel
     center_idx = view_size // 2
-    center_ray = rays_j2000[center_idx, center_idx]
+    center_ray = rays_jupiter[center_idx, center_idx]
     print(
         f"   Testing center pixel ({center_idx}, {center_idx}) -> detector pixel ({x[center_idx, center_idx]:.0f}, {y[center_idx, center_idx]:.0f})"
     )
@@ -175,7 +182,7 @@ def create_view_from_framelets(
         if i % 100 == 0:
             print(f"   Row {i}/{view_size}... ({hit_count} hits so far)")
         for j in range(view_size):
-            ray_dir = rays_j2000[i, j]
+            ray_dir = rays_jupiter[i, j]
             intersection = ellipsoid.ray_intersection(cam_position, ray_dir)
             if intersection is not None:
                 surface_positions[i, j] = intersection
@@ -204,17 +211,12 @@ def create_view_from_framelets(
         if framelet.frame_number == 0 or framelet.frame_number >= len(framelets) - 1:
             continue
 
-        # Get camera state for this framelet
-        state, _ = spice.spkezr("JUNO", framelet.et, "J2000", "NONE", "JUPITER")
-        fl_cam_pos = state[:3]
-        fl_cam_orient = spice.pxform("JUNO_JUNOCAM", "J2000", framelet.et)
-
-        # Sample framelet at surface positions
+        # Sample framelet at surface positions using precomputed camera state
         sampled, valid_mask, debug_info = sample_framelet_at_positions(
             surface_positions,
             framelet.data,
-            fl_cam_pos,
-            fl_cam_orient,
+            framelet.cam_position,
+            framelet.cam_orient,
             fov_data,
             ellipsoid,
         )
@@ -305,9 +307,9 @@ def sample_framelet_at_positions(
 
     # Transform to camera frame
     rays = valid_pos - cam_pos
-    # cam_orient transforms instrument->J2000: v_j2000 = cam_orient @ v_inst
-    # So inverse is: v_inst = cam_orient.T @ v_j2000 (for column vectors)
-    # For row vectors: v_inst = v_j2000 @ cam_orient (no transpose needed!)
+    # cam_orient transforms instrument->IAU_JUPITER: v_jupiter = cam_orient @ v_inst
+    # So inverse is: v_inst = cam_orient.T @ v_jupiter (for column vectors)
+    # For row vectors: v_inst = v_jupiter @ cam_orient (no transpose needed!)
     rays_inst = rays @ cam_orient
 
     # Use pinhole camera model with intrinsics from SPICE
@@ -393,9 +395,9 @@ def main():
 
         # Load image
         print("\n3. Loading image metadata...")
-        # fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")
+        fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")
         # fname = Path("images/raw/JNCE_2021159_34C00055_V01-raw.png")
-        fname = Path("images/raw/JNCE_2021159_34C00048_V01-raw.png")
+        # fname = Path("images/raw/JNCE_2021159_34C00048_V01-raw.png")
         junocam_img = JunoCamImage(fname)
 
         print(f"\n   Product ID: {junocam_img.product_id}")
@@ -423,14 +425,14 @@ def main():
         # Always use the middle frame
         num_frames = len(framelets_by_color["green"])
         view_frame_idx = num_frames // 2
-        view_et = start_et + view_frame_idx * interframe_delay
+        reference_framelet = framelets_by_color["green"][view_frame_idx]
 
         print(f"\n5. Using frame {view_frame_idx} for view reference")
-        print(f"   View ET: {view_et:.2f}")
+        print(f"   View ET: {reference_framelet.et:.2f}")
 
         # Create view
         output_image = create_view_from_framelets(
-            framelets_by_color, ellipsoid, view_et
+            framelets_by_color, ellipsoid, reference_framelet
         )
 
         if output_image is not None:
