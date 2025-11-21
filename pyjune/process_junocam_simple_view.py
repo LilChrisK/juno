@@ -96,57 +96,107 @@ def create_view_from_framelets(
 
     fov_data = get_junocam_fov()  # Still needed for sampling function signature
 
-    # Find where Jupiter actually appears by testing sample rays
-    print("   Finding Jupiter location in detector...")
+    # Use the raw framelet dimensions directly
+    print("   Calculating view size from framelet dimensions...")
 
-    hit_pixels = []
-    # Sample VERY densely to get accurate extent
-    for x in range(-500, 2148, 10):  # Every 10 pixels, wide range
-        for y in range(-500, 628, 10):  # Every 10 pixels, wide range
-            ray_inst = np.array([float(x), float(y), focal_length_pixels])
-            ray_j2000 = cam_orient @ ray_inst
-            ray_j2000 = ray_j2000 / np.linalg.norm(ray_j2000)
+    green_framelets = framelets_by_color["green"]
+    num_framelets = len([f for f in green_framelets if f.frame_number > 0 and f.frame_number < len(green_framelets) - 1])
 
-            intersection = ellipsoid.ray_intersection(cam_position, ray_j2000)
+    framelet_width = green_framelets[0].data.shape[1]  # 1648
+    framelet_height = green_framelets[0].data.shape[0]  # 128
+
+    # Total vertical extent of all framelets
+    total_height = num_framelets * framelet_height
+
+    # Use larger dimension for square output, with MORE margin
+    view_size = int(max(framelet_width, total_height) * 2.0)  # Increased from 1.5 to 2.0
+
+    # Clamp to reasonable size
+    view_size = max(512, min(view_size, 4096))
+
+    print(f"   Framelet dimensions: {framelet_width} x {framelet_height}")
+    print(f"   Using {num_framelets} framelets")
+    print(f"   Total vertical extent: {total_height} pixels")
+    print(f"   View size: {view_size}x{view_size} pixels")
+
+    # Get principal point for green band (detector center)
+    cx = spice.gdpool("INS-61502_DISTORTION_X", 0, 1)[0]
+    cy = spice.gdpool("INS-61502_DISTORTION_Y", 0, 1)[0]
+
+    # Find where Jupiter actually appears by sampling a coarse grid
+    print(f"\n2. Finding Jupiter's extent in detector space...")
+    sample_size = 100  # Coarse grid for quick sampling
+
+    # Create a large sampling grid to find Jupiter
+    search_size = max(framelet_width, total_height) * 2
+    search_half = search_size / 2
+
+    y_sample, x_sample = np.mgrid[
+        cy - search_half:cy + search_half:sample_size*1j,
+        cx - search_half:cx + search_half:sample_size*1j
+    ]
+
+    # Create rays for sampling
+    rays_sample = np.stack([
+        x_sample.astype(np.float32),
+        y_sample.astype(np.float32),
+        np.full((sample_size, sample_size), focal_length_pixels, dtype=np.float32),
+    ], axis=-1)
+
+    # Transform to Jupiter frame
+    rays_jupiter_sample = rays_sample @ cam_orient.T
+
+    # Test which rays hit Jupiter
+    jupiter_hits = np.zeros((sample_size, sample_size), dtype=bool)
+    for i in range(sample_size):
+        for j in range(sample_size):
+            ray_dir = rays_jupiter_sample[i, j]
+            intersection = ellipsoid.ray_intersection(cam_position, ray_dir)
             if intersection is not None:
-                hit_pixels.append((x, y))
+                jupiter_hits[i, j] = True
 
-    if len(hit_pixels) == 0:
-        print("   ERROR: Jupiter not visible in this frame!")
-        return None
+    # Find bounding box of Jupiter in detector space
+    if np.any(jupiter_hits):
+        hit_rows, hit_cols = np.where(jupiter_hits)
+        y_min = y_sample[hit_rows.min(), 0]
+        y_max = y_sample[hit_rows.max(), 0]
+        x_min = x_sample[0, hit_cols.min()]
+        x_max = x_sample[0, hit_cols.max()]
 
-    hit_pixels = np.array(hit_pixels)
-    x_min, x_max = hit_pixels[:, 0].min(), hit_pixels[:, 0].max()
-    y_min, y_max = hit_pixels[:, 1].min(), hit_pixels[:, 1].max()
+        # Add padding 
+        y_range = y_max - y_min
+        x_range = x_max - x_min
+        padding = 0.05 # %
 
-    # Center on the geometric center of the bounding box, not the mean of samples
-    x_offset = int((x_min + x_max) / 2)
-    y_offset = int((y_min + y_max) / 2)
+        y_min -= y_range * padding
+        y_max += y_range * padding
+        x_min -= x_range * padding
+        x_max += x_range * padding
 
-    # Calculate required view size to capture all of Jupiter with margin
-    x_span = x_max - x_min
-    y_span = y_max - y_min
+        # Make it square by expanding the smaller dimension
+        y_center = (y_min + y_max) / 2
+        x_center = (x_min + x_max) / 2
+        half_size = max(y_max - y_min, x_max - x_min) / 2
 
-    # Use the larger span and make it square with HUGE margin to ensure we get everything
-    max_span = max(x_span, y_span)
-    view_size = int(max_span * 2)
+        y_start = y_center - half_size
+        y_end = y_center + half_size
+        x_start = x_center - half_size
+        x_end = x_center + half_size
 
-    # Clamp to reasonable size, prefer larger
-    view_size = max(1024, min(view_size, 2048))
+        print(f"   Jupiter extent: X=[{x_min:.0f}, {x_max:.0f}], Y=[{y_min:.0f}, {y_max:.0f}]")
+        print(f"   View center: ({x_center:.0f}, {y_center:.0f})")
+        print(f"   View bounds: X=[{x_start:.0f}, {x_end:.0f}], Y=[{y_start:.0f}, {y_end:.0f}]")
+    else:
+        # Fallback to centered view if Jupiter not found in sampling
+        print("   Warning: Jupiter not found in coarse sampling, using centered view")
+        half_size = view_size / 2
+        x_start = cx - half_size
+        x_end = cx + half_size
+        y_start = cy - half_size
+        y_end = cy + half_size
 
-    print(f"   Jupiter center at pixel: ({x_offset}, {y_offset})")
-    print(
-        f"   Jupiter range: X=[{x_min:.0f}, {x_max:.0f}], Y=[{y_min:.0f}, {y_max:.0f}]"
-    )
-    print(f"   Jupiter span: {x_span:.0f} x {y_span:.0f} pixels")
-    print(f"   View size: {view_size}x{view_size} pixels (4x margin, min 1024)")
-
-    # Create square view grid
-    print(f"\n2. Creating {view_size}x{view_size} view grid...")
-    half_size = view_size // 2
-    y, x = np.mgrid[-half_size:half_size, -half_size:half_size]
-    x = x + x_offset
-    y = y + y_offset
+    print(f"\n3. Creating {view_size}x{view_size} view grid...")
+    y, x = np.mgrid[y_start:y_end:view_size*1j, x_start:x_end:view_size*1j]
 
     # Create rays in camera pixel coordinates
     rays_camera = np.stack(
@@ -164,7 +214,7 @@ def create_view_from_framelets(
     rays_jupiter = rays_camera @ cam_orient.T
 
     # Project rays onto Jupiter surface
-    print("\n3. Projecting rays onto Jupiter surface...")
+    print("\n4. Projecting rays onto Jupiter surface...")
     surface_positions = np.full((view_size, view_size, 3), np.nan, dtype=np.float32)
 
     # Debug: test center pixel
@@ -173,7 +223,6 @@ def create_view_from_framelets(
     print(
         f"   Testing center pixel ({center_idx}, {center_idx}) -> detector pixel ({x[center_idx, center_idx]:.0f}, {y[center_idx, center_idx]:.0f})"
     )
-    print(f"   Expected detector pixel for Jupiter center: ({x_offset}, {y_offset})")
     center_hit = ellipsoid.ray_intersection(cam_position, center_ray)
     print(f"   Center hit Jupiter: {center_hit is not None}")
 
@@ -194,7 +243,7 @@ def create_view_from_framelets(
     )
 
     # Sample framelets at surface positions
-    print("\n4. Sampling framelets...")
+    print("\n5. Sampling framelets...")
 
     # Use single channel for grayscale output
     gray_values = np.zeros((view_size, view_size), dtype=np.float32)
@@ -245,7 +294,7 @@ def create_view_from_framelets(
         return None
 
     # Average and normalize
-    print("\n5. Generating final grayscale image...")
+    print("\n6. Generating final grayscale image...")
     mask = gray_counts > 0
     gray_values[mask] /= gray_counts[mask]
 
@@ -380,7 +429,7 @@ def sample_framelet_at_positions(
 
 def main():
     print("=" * 70)
-    print("JUNOCAM SIMPLE VIEW (Example1.py style)")
+    print("JUNOCAM SIMPLE VIEW)")
     print("=" * 70)
 
     # Load SPICE kernels
@@ -395,9 +444,9 @@ def main():
 
         # Load image
         print("\n3. Loading image metadata...")
-        fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")
+        # fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")
         # fname = Path("images/raw/JNCE_2021159_34C00055_V01-raw.png")
-        # fname = Path("images/raw/JNCE_2021159_34C00048_V01-raw.png")
+        fname = Path("images/raw/JNCE_2021159_34C00048_V01-raw.png")
         junocam_img = JunoCamImage(fname)
 
         print(f"\n   Product ID: {junocam_img.product_id}")

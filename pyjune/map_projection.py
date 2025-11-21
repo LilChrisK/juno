@@ -49,22 +49,22 @@ class JupiterEllipsoid:
         # Returns [equatorial_a, equatorial_b, polar_c] in km
         try:
             radii = spice.bodvrd('JUPITER', 'RADII', 3)[1]
-            self.a = radii[0]  # Equatorial radius (x-axis)
-            self.b = radii[1]  # Equatorial radius (y-axis)
-            self.c = radii[2]  # Polar radius (z-axis)
+            self.equatorial_radius_a = radii[0]  # Equatorial radius (x-axis)
+            self.equatorial_radius_b = radii[1]  # Equatorial radius (y-axis)
+            self.polar_radius = radii[2]  # Polar radius (z-axis)
 
             print(f"Jupiter ellipsoid radii from SPICE:")
-            print(f"  Equatorial (a): {self.a:.1f} km")
-            print(f"  Equatorial (b): {self.b:.1f} km")
-            print(f"  Polar (c): {self.c:.1f} km")
-            print(f"  Flattening: {(self.a - self.c) / self.a:.6f}")
+            print(f"  Equatorial (a): {self.equatorial_radius_a:.1f} km")
+            print(f"  Equatorial (b): {self.equatorial_radius_b:.1f} km")
+            print(f"  Polar (c): {self.polar_radius:.1f} km")
+            print(f"  Flattening: {(self.equatorial_radius_a - self.polar_radius) / self.equatorial_radius_a:.6f}")
 
         except Exception as e:
             print(f"Warning: Could not query Jupiter radii from SPICE: {e}")
             print("Using default values...")
-            self.a = 71492.0  # km
-            self.b = 71492.0
-            self.c = 66854.0
+            self.equatorial_radius_a = 71492.0  # km
+            self.equatorial_radius_b = 71492.0
+            self.polar_radius = 66854.0
 
     def ray_intersection(
         self,
@@ -91,7 +91,7 @@ class JupiterEllipsoid:
         o = ray_origin
 
         # Ellipsoid radii
-        a, b, c = self.a, self.b, self.c
+        a, b, c = self.equatorial_radius_a, self.equatorial_radius_b, self.polar_radius
 
         # Quadratic coefficients for: At² + Bt + C = 0
         # Substitute ray equation into ellipsoid equation
@@ -631,7 +631,7 @@ class OrthographicProjector:
 
         # Inverse orthographic projection
         rho = np.sqrt(x_proj**2 + y_proj**2)
-        c = np.arcsin(np.minimum(rho / self.ellipsoid.a, 1.0))
+        c = np.arcsin(np.minimum(rho / self.ellipsoid.equatorial_radius_a, 1.0))
 
         # Latitude
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -660,7 +660,7 @@ class OrthographicProjector:
         lon_deg = np.where(lon_deg < 0, lon_deg + 360.0, lon_deg)
 
         # Mark pixels outside visible hemisphere as invalid
-        valid_mask = rho <= self.ellipsoid.a
+        valid_mask = rho <= self.ellipsoid.equatorial_radius_a
 
         # Convert to Cartesian J2000 coordinates
         surface_positions = np.zeros((self.map_height, self.map_width, 3), dtype=np.float32)
@@ -753,8 +753,8 @@ class OrthographicProjector:
             return  # Point is on back side
 
         # Orthographic projection
-        x_proj = self.ellipsoid.a * np.cos(lat_rad) * np.sin(lon_rad - lon0_rad)
-        y_proj = self.ellipsoid.a * (
+        x_proj = self.ellipsoid.equatorial_radius_a * np.cos(lat_rad) * np.sin(lon_rad - lon0_rad)
+        y_proj = self.ellipsoid.equatorial_radius_a * (
             np.cos(lat0_rad) * np.sin(lat_rad) -
             np.sin(lat0_rad) * np.cos(lat_rad) * np.cos(lon_rad - lon0_rad)
         )

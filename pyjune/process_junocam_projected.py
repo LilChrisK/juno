@@ -204,7 +204,7 @@ def project_junocam_to_map(
     range_km = np.linalg.norm(state[:3])
 
     # Scale to show ~1.5x Jupiter diameter in frame
-    scale_km_per_pixel = (ellipsoid.a * 3.0) / map_size
+    scale_km_per_pixel = (ellipsoid.equatorial_radius_a * 3.0) / map_size
     print(f"   Map scale: {scale_km_per_pixel:.2f} km/pixel")
     print(f"   Spacecraft range: {range_km:,.0f} km")
 
@@ -318,9 +318,9 @@ def project_junocam_to_map(
     #     "map_height_pixels": map_size,
     #     "scale_km_per_pixel": scale_km_per_pixel,
     #     "ellipsoid_radii_km": {
-    #         "equatorial_a": ellipsoid.a,
-    #         "equatorial_b": ellipsoid.b,
-    #         "polar_c": ellipsoid.c
+    #         "equatorial_a": ellipsoid.equatorial_radius_a,
+    #         "equatorial_b": ellipsoid.equatorial_radius_b,
+    #         "polar_c": ellipsoid.polar_radius
     #     },
     #     "sample_step": sample_step,
     #     "spacecraft_range_km": float(range_km)
