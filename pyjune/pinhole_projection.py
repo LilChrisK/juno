@@ -1,6 +1,6 @@
 """
-Simple JunoCam processing - replicates Example1.py approach.
-Creates a synthetic pinhole camera view by sampling framelets.
+Pinhole projection processing for JunoCam framelets.
+Creates synthetic pinhole camera views by sampling framelets.
 """
 
 import cv2
@@ -9,10 +9,30 @@ from pathlib import Path
 import sys
 import spiceypy as spice
 from scipy.interpolate import RectBivariateSpline
+from dataclasses import dataclass
 
-from spice_correction import SpiceKernelManager, JunoCamImage
-from map_projection import JupiterEllipsoid, get_junocam_fov
-from main import Framelet
+from map_projection import JupiterEllipsoid
+
+
+@dataclass
+class Framelet:
+    """Represents a single framelet (color band strip) from JunoCam."""
+
+    frame_number: int
+    color: str  # 'red', 'green', or 'blue'
+    color_index: int  # 0=blue, 1=green, 2=red
+    data: np.ndarray
+    et: float = 0.0  # Ephemeris time for this framelet
+    cam_position: np.ndarray = None  # Camera position in IAU_JUPITER frame
+    cam_orient: np.ndarray = None  # Camera orientation matrix (JUNOCAM->IAU_JUPITER)
+
+    @property
+    def height(self) -> int:
+        return self.data.shape[0]
+
+    @property
+    def width(self) -> int:
+        return self.data.shape[1]
 
 
 def extract_framelets(
@@ -63,20 +83,23 @@ def extract_framelets(
     return framelets_by_color
 
 
-def create_view_from_framelets(
+def project_framelets_to_pinhole_view(
     framelets_by_color: dict, ellipsoid: JupiterEllipsoid, reference_framelet
 ):
     """
-    Create a synthetic camera view by sampling framelets.
+    Create a synthetic pinhole camera view by projecting framelets onto Jupiter's surface.
     Automatically sizes the view to capture all of Jupiter.
 
     Args:
         framelets_by_color: Dictionary of framelets by color
-        ellipsoid: Jupiter ellipsoid
+        ellipsoid: Jupiter ellipsoid model
         reference_framelet: Framelet to use for view geometry (typically middle frame)
+
+    Returns:
+        Tuple of (rgb_composite, red_channel, green_channel, blue_channel) or (None, None, None, None)
     """
     print("\n" + "=" * 70)
-    print("CREATING SYNTHETIC VIEW")
+    print("CREATING SYNTHETIC PINHOLE VIEW")
     print("=" * 70)
 
     # Use precomputed camera state from reference framelet
@@ -352,7 +375,6 @@ def sample_framelet_at_positions(
         framelet_data: Framelet pixel data (height x width)
         cam_pos: Camera position in IAU_JUPITER frame
         cam_orient: Camera orientation matrix (JUNO_JUNOCAM -> IAU_JUPITER)
-        ellipsoid: Jupiter ellipsoid model
         color: Color band ('red', 'green', or 'blue')
 
     Returns:
@@ -368,9 +390,6 @@ def sample_framelet_at_positions(
     # Flatten
     flat_pos = surface_positions.reshape(-1, 3)
     valid_surface = ~np.isnan(flat_pos[:, 0])
-
-    # Debug: check input
-    # print(f"      [sample_framelet] Input shape: {surface_positions.shape}, valid: {np.sum(valid_surface)}/{len(flat_pos)}")
 
     pixel_values = np.zeros(len(flat_pos), dtype=np.float32)
     valid_mask = np.zeros(len(flat_pos), dtype=np.float32)
@@ -484,94 +503,3 @@ def sample_framelet_at_positions(
         valid_mask.reshape(output_shape),
         debug_info,
     )
-
-
-def main():
-    print("=" * 70)
-    print("JUNOCAM SIMPLE VIEW)")
-    print("=" * 70)
-
-    # Load SPICE kernels
-    print("\n1. Loading SPICE kernels...")
-    km = SpiceKernelManager()
-    km.load_kernels()
-
-    try:
-        # Initialize Jupiter ellipsoid
-        print("\n2. Initializing Jupiter ellipsoid...")
-        ellipsoid = JupiterEllipsoid()
-
-        # Load image
-        print("\n3. Loading image metadata...")
-        # fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")
-        # fname = Path("images/raw/JNCE_2021159_34C00055_V01-raw.png")
-        fname = Path("images/raw/JNCE_2021159_34C00048_V01-raw.png")
-        junocam_img = JunoCamImage(fname)
-
-        print(f"\n   Product ID: {junocam_img.product_id}")
-        print(f"   Image time: {junocam_img.image_time}")
-
-        # Get timing and apply SPICE corrections
-        start_et = junocam_img.get_ephemeris_time()
-        interframe_delay_str = junocam_img.metadata.get("INTERFRAME_DELAY", "0.371 <s>")
-        interframe_delay = float(interframe_delay_str.split()[0])
-
-        # Apply timing corrections from SPICE instrument kernel
-        start_time_bias = spice.gdpool("INS-61500_START_TIME_BIAS", 0, 1)[0]
-        interframe_delta = spice.gdpool("INS-61500_INTERFRAME_DELTA", 0, 1)[0]
-
-        start_et += start_time_bias
-        interframe_delay += interframe_delta
-
-        print(f"   Start ET: {start_et:.2f}")
-        print(f"   Interframe delay: {interframe_delay:.3f} seconds")
-
-        # Extract framelets
-        print("\n4. Extracting framelets...")
-        framelets_by_color = extract_framelets(fname, start_et, interframe_delay)
-
-        # Always use the middle frame
-        num_frames = len(framelets_by_color["green"])
-        view_frame_idx = num_frames // 2
-        reference_framelet = framelets_by_color["green"][view_frame_idx]
-
-        print(f"\n5. Using frame {view_frame_idx} for view reference")
-        print(f"   View ET: {reference_framelet.et:.2f}")
-
-        # Create view
-        output_rgb, output_red, output_green, output_blue = create_view_from_framelets(
-            framelets_by_color, ellipsoid, reference_framelet
-        )
-
-        if output_rgb is not None:
-            # Save all outputs
-            output_dir = Path("images/processed/simple")
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-            # Save RGB composite
-            rgb_file = output_dir / f"{junocam_img.product_id}_simple_view_rgb.png"
-            cv2.imwrite(str(rgb_file), output_rgb)
-            print(f"\n✓ Saved RGB composite: {rgb_file}")
-
-            # Save individual channels
-            red_file = output_dir / f"{junocam_img.product_id}_simple_view_red.png"
-            cv2.imwrite(str(red_file), output_red)
-            print(f"✓ Saved red channel: {red_file}")
-
-            green_file = output_dir / f"{junocam_img.product_id}_simple_view_green.png"
-            cv2.imwrite(str(green_file), output_green)
-            print(f"✓ Saved green channel: {green_file}")
-
-            blue_file = output_dir / f"{junocam_img.product_id}_simple_view_blue.png"
-            cv2.imwrite(str(blue_file), output_blue)
-            print(f"✓ Saved blue channel: {blue_file}")
-        else:
-            print("\n✗ Could not create view - Jupiter not visible in selected frame")
-
-    finally:
-        km.unload_kernels()
-        print("\n✓ SPICE kernels unloaded")
-
-
-if __name__ == "__main__":
-    main()
