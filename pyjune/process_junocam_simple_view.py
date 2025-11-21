@@ -401,10 +401,28 @@ def sample_framelet_at_positions(
     cx = spice.gdpool(f"INS{naif_id}_DISTORTION_X", 0, 1)[0]
     cy = spice.gdpool(f"INS{naif_id}_DISTORTION_Y", 0, 1)[0]
 
-    # Pinhole projection: pixel = (X/Z * f, Y/Z * f) + principal_point
+    # Distortion coefficients (radial distortion model)
+    k1 = spice.gdpool(f"INS{naif_id}_DISTORTION_K1", 0, 1)[0]
+    k2 = spice.gdpool(f"INS{naif_id}_DISTORTION_K2", 0, 1)[0]
+
+    # Apply distortion-corrected pinhole projection
+    # Per juno_junocam_v03.ti kernel documentation (lines 386-394):
+    # 1. Normalize by Z (perspective division without focal length)
+    # 2. Apply radial distortion model
+    # 3. Scale by focal length and add principal point
     with np.errstate(divide="ignore", invalid="ignore"):
-        pixel_x = (rays_inst[:, 0] / rays_inst[:, 2]) * focal_length + cx
-        pixel_y = (rays_inst[:, 1] / rays_inst[:, 2]) * focal_length + cy
+        cam_x = rays_inst[:, 0] / rays_inst[:, 2]
+        cam_y = rays_inst[:, 1] / rays_inst[:, 2]
+
+        # Apply radial distortion: dr = 1 + k1*r^2 + k2*r^4
+        r2 = cam_x**2 + cam_y**2
+        dr = 1.0 + k1 * r2 + k2 * r2 * r2
+        cam_x_distorted = cam_x * dr
+        cam_y_distorted = cam_y * dr
+
+        # Scale by focal length and add principal point
+        pixel_x = cam_x_distorted * focal_length + cx
+        pixel_y = cam_y_distorted * focal_length + cy
 
     # Debug info
     in_front = rays_inst[:, 2] > 0
@@ -474,9 +492,9 @@ def main():
 
         # Load image
         print("\n3. Loading image metadata...")
-        fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")
+        # fname = Path("images/raw/JNCE_2021159_34C00080_V01-raw.png")
         # fname = Path("images/raw/JNCE_2021159_34C00055_V01-raw.png")
-        # fname = Path("images/raw/JNCE_2021159_34C00048_V01-raw.png")
+        fname = Path("images/raw/JNCE_2021159_34C00048_V01-raw.png")
         junocam_img = JunoCamImage(fname)
 
         print(f"\n   Product ID: {junocam_img.product_id}")
