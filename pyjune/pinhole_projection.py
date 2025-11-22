@@ -281,6 +281,10 @@ def project_framelets_to_pinhole_view(
     # Sample framelets at surface positions
     print("\n5. Sampling framelets...")
 
+    # Get Sun position (single query for entire image)
+    sun_position, _ = spice.spkpos('SUN', reference_et, 'IAU_JUPITER', 'LT+S', 'JUPITER')
+    print(f"   Sun position in IAU_JUPITER frame: {sun_position}")
+
     # Create arrays for RGB channels
     rgb_values = np.zeros((view_size, view_size, 3), dtype=np.float32)
     rgb_counts = np.zeros((view_size, view_size, 3), dtype=np.float32)
@@ -310,6 +314,7 @@ def project_framelets_to_pinhole_view(
                 framelet.cam_position,
                 framelet.cam_orient,
                 ellipsoid,
+                sun_position,
                 color=color_name,
             )
 

@@ -173,6 +173,7 @@ class CylindricalProjection:
         framelet_cam_position: np.ndarray,
         framelet_cam_orient: np.ndarray,
         ellipsoid,
+        sun_position: np.ndarray,
         color_channel: str
     ):
         """
@@ -186,6 +187,7 @@ class CylindricalProjection:
             framelet_cam_position: Camera position in IAU_JUPITER frame (km)
             framelet_cam_orient: Camera orientation matrix (JUNO_JUNOCAM -> IAU_JUPITER)
             ellipsoid: JupiterEllipsoid instance for computing surface normals
+            sun_position: Sun position in IAU_JUPITER frame (km)
             color_channel: 'red', 'green', or 'blue'
         """
         from framelet_sampling import sample_framelet_at_positions
@@ -200,6 +202,7 @@ class CylindricalProjection:
             framelet_cam_position,
             framelet_cam_orient,
             ellipsoid,
+            sun_position,
             color_channel
         )
 
@@ -251,6 +254,12 @@ class CylindricalProjection:
         red_norm = normalize_channel(red)
         green_norm = normalize_channel(green)
         blue_norm = normalize_channel(blue)
+
+        # Set background (no data) to purple
+        no_data_mask = self.map_counts == 0
+        red_norm[no_data_mask] = 128
+        green_norm[no_data_mask] = 0
+        blue_norm[no_data_mask] = 128
 
         # Create RGB composite (BGR for OpenCV)
         rgb = np.stack([blue_norm, green_norm, red_norm], axis=-1)

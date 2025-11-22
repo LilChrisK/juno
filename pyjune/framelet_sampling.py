@@ -17,6 +17,7 @@ def sample_framelet_at_positions(
     cam_pos: np.ndarray,
     cam_orient: np.ndarray,
     ellipsoid,
+    sun_position: np.ndarray,
     color: str = "green",
 ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
     """
@@ -32,6 +33,7 @@ def sample_framelet_at_positions(
         cam_pos: Camera position in IAU_JUPITER frame (km)
         cam_orient: Camera orientation matrix (JUNO_JUNOCAM -> IAU_JUPITER)
         ellipsoid: JupiterEllipsoid instance for computing surface normals
+        sun_position: Sun position in IAU_JUPITER frame (km)
         color: Color band ('red', 'green', or 'blue')
 
     Returns:
@@ -95,12 +97,24 @@ def sample_framelet_at_positions(
     dot_product = np.sum(normals * to_camera_normalized, axis=1)
     surface_visible = dot_product > 0
 
-    # Filter to only visible surface points
-    valid_pos = valid_pos[surface_visible]
+    # Check illumination: surface normal must point towards Sun (dayside)
+    # Vector from surface to Sun
+    to_sun = sun_position - valid_pos
+    to_sun_normalized = to_sun / np.linalg.norm(to_sun, axis=1, keepdims=True)
+
+    # Dot product: positive means surface is illuminated by Sun
+    sun_dot = np.sum(normals * to_sun_normalized, axis=1)
+    surface_illuminated = sun_dot > 0
+
+    # Combine visibility and illumination checks
+    surface_valid = surface_visible & surface_illuminated
+
+    # Filter to only visible and illuminated surface points
+    valid_pos = valid_pos[surface_valid]
 
     # Update valid_surface mask
     temp_mask = np.zeros(len(flat_pos), dtype=bool)
-    temp_mask[valid_surface] = surface_visible
+    temp_mask[valid_surface] = surface_valid
     valid_surface = temp_mask
 
     if not np.any(valid_surface):

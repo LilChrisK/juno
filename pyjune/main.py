@@ -82,6 +82,10 @@ def process_cylindrical(
     print("\nComputing surface grid...")
     projection.compute_surface_grid(ellipsoid, reference_et)
 
+    # Get Sun position (single query for entire image)
+    sun_position, _ = spice.spkpos('SUN', reference_et, 'IAU_JUPITER', 'LT+S', 'JUPITER')
+    print(f"\nSun position in IAU_JUPITER frame: {sun_position}")
+
     # Add framelets
     print("\nProcessing framelets...")
 
@@ -99,6 +103,7 @@ def process_cylindrical(
                 framelet.cam_position,
                 framelet.cam_orient,
                 ellipsoid,
+                sun_position,
                 color_name
             )
 
@@ -144,8 +149,8 @@ Examples:
     parser.add_argument(
         '--image',
         type=str,
-        # default='images/raw/JNCE_2021159_34C00080_V01-raw.png',
-        default='images/raw/JNCE_2021159_34C00055_V01-raw.png',
+        default='images/raw/JNCE_2021159_34C00080_V01-raw.png',
+        # default='images/raw/JNCE_2021159_34C00055_V01-raw.png',
         # default='images/raw/JNCE_2021159_34C00048_V01-raw.png',
         help='Path to input image (default: JNCE_2021159_34C00080_V01-raw.png)'
     )
@@ -153,7 +158,7 @@ Examples:
     parser.add_argument(
         '--cyl-resolution',
         type=float,
-        default=0.5,
+        default=0.1,
         help='Cylindrical projection resolution in degrees/pixel (default: 0.1)'
     )
 
