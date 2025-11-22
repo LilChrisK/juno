@@ -282,7 +282,7 @@ def project_framelets_to_pinhole_view(
     print("\n5. Sampling framelets...")
 
     # Get Sun position (single query for entire image)
-    sun_position, _ = spice.spkpos('SUN', reference_et, 'IAU_JUPITER', 'LT+S', 'JUPITER')
+    sun_position, _ = spice.spkpos('SUN', reference_framelet.et, 'IAU_JUPITER', 'LT+S', 'JUPITER')
     print(f"   Sun position in IAU_JUPITER frame: {sun_position}")
 
     # Create arrays for RGB channels
@@ -354,6 +354,12 @@ def project_framelets_to_pinhole_view(
         if channel_data.max() > 0:
             normalized = channel_data / channel_data.max() * 255
             rgb_normalized[:, :, channel_idx] = normalized.astype(np.uint8)
+
+    # Set background (no data) to purple
+    no_data_mask = rgb_counts.sum(axis=2) == 0
+    rgb_normalized[no_data_mask, 0] = 128  # Red
+    rgb_normalized[no_data_mask, 1] = 0    # Green
+    rgb_normalized[no_data_mask, 2] = 128  # Blue
 
     # Create RGB composite (OpenCV uses BGR format)
     output_rgb = cv2.cvtColor(rgb_normalized, cv2.COLOR_RGB2BGR)
