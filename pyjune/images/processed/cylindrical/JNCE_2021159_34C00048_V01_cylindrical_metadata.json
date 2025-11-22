@@ -1,0 +1,18 @@
+{
+  "product_id": "JNCE_2021159_34C00048_V01",
+  "projection_type": "cylindrical_equirectangular",
+  "coordinate_system": "planetographic_system_iii_west",
+  "lon_min": 0.0,
+  "lon_max": 360.0,
+  "lat_min": -90.0,
+  "lat_max": 90.0,
+  "resolution_deg": 0.5,
+  "width": 720,
+  "height": 360,
+  "reference_et": 676409188.455884,
+  "coverage": {
+    "total_pixels": 259200,
+    "valid_pixels": 21270,
+    "coverage_percent": 8.206018518518517
+  }
+}
