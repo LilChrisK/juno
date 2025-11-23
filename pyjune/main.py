@@ -12,7 +12,6 @@ import spiceypy as spice
 
 from spice_correction import SpiceKernelManager, JunoCamImage
 from map_projection import JupiterEllipsoid
-from utils import create_debug_visualization
 from pinhole_projection import extract_framelets, project_framelets_to_pinhole_view
 from cylindrical_projection import CylindricalProjection
 
@@ -149,9 +148,10 @@ Examples:
     parser.add_argument(
         '--image',
         type=str,
-        default='images/raw/JNCE_2021159_34C00080_V01-raw.png',
+        # default='images/raw/JNCE_2021159_34C00080_V01-raw.png',
         # default='images/raw/JNCE_2021159_34C00055_V01-raw.png',
         # default='images/raw/JNCE_2021159_34C00048_V01-raw.png',
+        default='images/raw/JNCE_2021106_33C00052_V01-raw.png',
         help='Path to input image (default: JNCE_2021159_34C00080_V01-raw.png)'
     )
 
