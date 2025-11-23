@@ -12,7 +12,7 @@ import numpy as np
 import spiceypy as spice
 from typing import Tuple
 
-from map_projection import JupiterEllipsoid
+from src.map_projection import JupiterEllipsoid
 
 
 def latlon_to_body_fixed(

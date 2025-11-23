@@ -16,7 +16,7 @@ from mpl_toolkits.mplot3d import Axes3D
 import spiceypy as spice
 from pathlib import Path
 
-from spice_correction import SpiceKernelManager, JunoCamImage
+from src.spice_correction import SpiceKernelManager, JunoCamImage
 
 
 def plot_sphere(

@@ -18,8 +18,8 @@ import json
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any
 
-from map_projection import JupiterEllipsoid
-from coordinates import latlon_to_body_fixed, normalize_longitude
+from src.map_projection import JupiterEllipsoid
+from src.coordinates import latlon_to_body_fixed, normalize_longitude
 
 
 class CylindricalProjection:

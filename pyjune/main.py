@@ -10,10 +10,10 @@ import argparse
 from pathlib import Path
 import spiceypy as spice
 
-from spice_correction import SpiceKernelManager, JunoCamImage
-from map_projection import JupiterEllipsoid
-from pinhole_projection import extract_framelets, project_framelets_to_pinhole_view
-from cylindrical_projection import CylindricalProjection
+from src.spice_correction import SpiceKernelManager, JunoCamImage
+from src.map_projection import JupiterEllipsoid
+from src.pinhole_projection import extract_framelets, project_framelets_to_pinhole_view
+from src.cylindrical_projection import CylindricalProjection
 
 
 def process_pinhole(framelets_by_color, ellipsoid, reference_framelet, junocam_img):
@@ -150,8 +150,8 @@ Examples:
         type=str,
         # default='images/raw/JNCE_2021159_34C00080_V01-raw.png',
         # default='images/raw/JNCE_2021159_34C00055_V01-raw.png',
-        # default='images/raw/JNCE_2021159_34C00048_V01-raw.png',
-        default='images/raw/JNCE_2021106_33C00052_V01-raw.png',
+        default='images/raw/JNCE_2021159_34C00048_V01-raw.png',
+        # default='images/raw/JNCE_2021106_33C00052_V01-raw.png',
         help='Path to input image (default: JNCE_2021159_34C00080_V01-raw.png)'
     )
 

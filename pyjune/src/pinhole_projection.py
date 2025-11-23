@@ -10,8 +10,8 @@ import sys
 import spiceypy as spice
 from dataclasses import dataclass
 
-from map_projection import JupiterEllipsoid
-from framelet_sampling import sample_framelet_at_positions
+from src.map_projection import JupiterEllipsoid
+from src.framelet_sampling import sample_framelet_at_positions
 
 
 @dataclass

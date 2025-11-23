@@ -11,10 +11,10 @@ import numpy as np
 from pathlib import Path
 import spiceypy as spice
 
-from spice_correction import SpiceKernelManager, JunoCamImage
-from map_projection import JupiterEllipsoid
-from pinhole_projection import extract_framelets
-from cylindrical_projection import CylindricalProjection
+from src.spice_correction import SpiceKernelManager, JunoCamImage
+from src.map_projection import JupiterEllipsoid
+from src.pinhole_projection import extract_framelets
+from src.cylindrical_projection import CylindricalProjection
 
 
 # ============================================================================

@@ -4,7 +4,7 @@ Test script to understand JunoCam geometry from SPICE kernels.
 
 import spiceypy as spice
 import numpy as np
-from spice_correction import SpiceKernelManager
+from src.spice_correction import SpiceKernelManager
 
 
 def explore_junocam_geometry():

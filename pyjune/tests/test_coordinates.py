@@ -8,8 +8,8 @@ import numpy as np
 import spiceypy as spice
 from pathlib import Path
 
-from spice_correction import SpiceKernelManager
-from map_projection import JupiterEllipsoid
+from src.spice_correction import SpiceKernelManager
+from src.map_projection import JupiterEllipsoid
 
 
 def test_round_trip_conversions():

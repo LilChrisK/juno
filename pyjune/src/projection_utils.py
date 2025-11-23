@@ -11,7 +11,7 @@ import numpy as np
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any
 
-from cylindrical_projection import CylindricalProjection
+from src.cylindrical_projection import CylindricalProjection
 
 
 def load_projection_with_images(

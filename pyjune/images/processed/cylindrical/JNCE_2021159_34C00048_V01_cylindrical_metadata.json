@@ -5,14 +5,14 @@
   "lon_min": 0.0,
   "lon_max": 360.0,
   "lat_min": -90.0,
-  "lat_max": 90.0,
-  "resolution_deg": 0.1,
-  "width": 3600,
-  "height": 1800,
+  "lat_max": 0.0,
+  "resolution_deg": 0.3,
+  "width": 1200,
+  "height": 300,
   "reference_et": 676409188.455884,
   "coverage": {
-    "total_pixels": 6480000,
-    "valid_pixels": 517429,
-    "coverage_percent": 7.985015432098766
+    "total_pixels": 360000,
+    "valid_pixels": 0,
+    "coverage_percent": 0.0
   }
 }
