@@ -16,7 +16,8 @@ import numpy as np
 import cv2
 import json
 from pathlib import Path
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple
+from framelet_sampling import sample_framelet_at_positions
 
 from src.map_projection import JupiterEllipsoid
 from src.coordinates import latlon_to_body_fixed, normalize_longitude
@@ -35,7 +36,7 @@ class CylindricalProjection:
         lon_max: float = 360.0,
         lat_min: float = -90.0,
         lat_max: float = 90.0,
-        resolution_deg: float = 0.1
+        resolution_deg: float = 0.1,
     ):
         """
         Initialize cylindrical projection.
@@ -129,7 +130,9 @@ class CylindricalProjection:
 
         return px, py
 
-    def compute_surface_grid(self, ellipsoid: JupiterEllipsoid, et: float) -> np.ndarray:
+    def compute_surface_grid(
+        self, ellipsoid: JupiterEllipsoid, et: float
+    ) -> np.ndarray:
         """
         Pre-compute 3D surface positions for all map pixels.
 
@@ -175,7 +178,7 @@ class CylindricalProjection:
         ellipsoid,
         camera_params,
         sun_position: np.ndarray,
-        color_channel: str
+        color_channel: str,
     ):
         """
         Add framelet data to the map using backward sampling.
@@ -192,10 +195,11 @@ class CylindricalProjection:
             sun_position: Sun position in IAU_JUPITER frame (km)
             color_channel: 'red', 'green', or 'blue'
         """
-        from framelet_sampling import sample_framelet_at_positions
 
         if self.surface_grid is None:
-            raise RuntimeError("Surface grid not computed. Call compute_surface_grid() first.")
+            raise RuntimeError(
+                "Surface grid not computed. Call compute_surface_grid() first."
+            )
 
         # Sample framelet at all grid positions
         pixel_values, valid_mask, debug_info = sample_framelet_at_positions(
@@ -206,17 +210,17 @@ class CylindricalProjection:
             ellipsoid,
             camera_params,
             sun_position,
-            color_channel
+            color_channel,
         )
 
         # Simply overwrite with new values (last sample wins)
         valid_pixels = valid_mask > 0
 
-        if color_channel == 'red':
+        if color_channel == "red":
             self.map_red[valid_pixels] = pixel_values[valid_pixels]
-        elif color_channel == 'green':
+        elif color_channel == "green":
             self.map_green[valid_pixels] = pixel_values[valid_pixels]
-        elif color_channel == 'blue':
+        elif color_channel == "blue":
             self.map_blue[valid_pixels] = pixel_values[valid_pixels]
 
         # Track coverage for statistics
@@ -289,11 +293,13 @@ class CylindricalProjection:
             "coverage": {
                 "total_pixels": int(self.width * self.height),
                 "valid_pixels": int(np.sum(self.map_counts > 0)),
-                "coverage_percent": float(np.sum(self.map_counts > 0) / (self.width * self.height) * 100)
-            }
+                "coverage_percent": float(
+                    np.sum(self.map_counts > 0) / (self.width * self.height) * 100
+                ),
+            },
         }
 
-        with open(output_dir / f"{product_id}_cylindrical_metadata.json", 'w') as f:
+        with open(output_dir / f"{product_id}_cylindrical_metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
 
         print(f"\n✓ Saved cylindrical projection:")
@@ -302,7 +308,7 @@ class CylindricalProjection:
         print(f"  Coverage: {metadata['coverage']['coverage_percent']:.1f}%")
 
     @staticmethod
-    def load(metadata_path: Path) -> 'CylindricalProjection':
+    def load(metadata_path: Path) -> "CylindricalProjection":
         """
         Load a saved cylindrical projection.
 
@@ -312,18 +318,18 @@ class CylindricalProjection:
         Returns:
             CylindricalProjection instance with loaded parameters
         """
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
         projection = CylindricalProjection(
-            lon_min=metadata['lon_min'],
-            lon_max=metadata['lon_max'],
-            lat_min=metadata['lat_min'],
-            lat_max=metadata['lat_max'],
-            resolution_deg=metadata['resolution_deg']
+            lon_min=metadata["lon_min"],
+            lon_max=metadata["lon_max"],
+            lat_min=metadata["lat_min"],
+            lat_max=metadata["lat_max"],
+            resolution_deg=metadata["resolution_deg"],
         )
 
-        projection.reference_et = metadata.get('reference_et')
+        projection.reference_et = metadata.get("reference_et")
 
         print(f"✓ Loaded projection from {metadata_path}")
 
