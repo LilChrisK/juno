@@ -176,6 +176,11 @@ def sample_framelet_at_positions(
     flat_pos = surface_positions.reshape(-1, 3)
     valid_surface = ~np.isnan(flat_pos[:, 0])
 
+    # DIAGNOSTIC: Show input array size and surface hit rate (commented out - too verbose with ROI culling)
+    # input_size = len(flat_pos)
+    # surface_hits = np.sum(valid_surface)
+    # print(f"         [DIAGNOSTIC] Input: {input_size:,} positions ({output_shape}), Surface hits: {surface_hits:,} ({surface_hits/input_size*100:.1f}%)")
+
     pixel_values = np.zeros(len(flat_pos), dtype=np.float32)
     valid_mask = np.zeros(len(flat_pos), dtype=np.float32)
     timings["1_setup"] = (time.perf_counter() - t0) * 1000  # milliseconds
@@ -315,12 +320,13 @@ def sample_framelet_at_positions(
     timings["8_bounds_checking"] = (time.perf_counter() - t0) * 1000
 
     # Debug - return info about why validation failed
+    num_valid = np.sum(framelet_valid)
     debug_info = {
         "total": len(valid_pos),
         "in_front": np.sum(in_front),
         "in_x": np.sum(in_x_bounds),
         "in_y": np.sum(in_y_bounds),
-        "valid": np.sum(framelet_valid),
+        "valid": num_valid,
         "pixel_x_range": (
             (float(pixel_x.min()), float(pixel_x.max())) if len(pixel_x) > 0 else (0, 0)
         ),
@@ -329,6 +335,10 @@ def sample_framelet_at_positions(
         ),
         "framelet_size": (height, width),
     }
+
+    # DIAGNOSTIC: Show final hit rate (commented out - too verbose with ROI culling)
+    # print(f"         [DIAGNOSTIC] After filtering: {len(valid_pos):,} candidates -> {num_valid:,} valid samples ({num_valid/input_size*100:.3f}% of input)")
+
 
     if np.any(framelet_valid):
         # ========== BILINEAR INTERPOLATION SETUP ==========

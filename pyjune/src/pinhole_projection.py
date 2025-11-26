@@ -83,6 +83,92 @@ def extract_framelets(
     return framelets_by_color
 
 
+def estimate_framelet_roi_fast(
+    surface_positions: np.ndarray,
+    framelet,
+    camera_params,
+    downsample_factor: int = 64,
+) -> tuple:
+    """
+    Fast ROI estimation using simplified projection (no visibility/illumination checks).
+
+    This lightweight version skips expensive surface normal computation and
+    visibility checks, since we only need to find WHERE the framelet MIGHT
+    project, not whether those points are actually valid.
+
+    Args:
+        surface_positions: Full grid of surface positions (H x W x 3)
+        framelet: Framelet to estimate ROI for
+        camera_params: Camera parameters
+        downsample_factor: Factor to downsample by for coarse grid (default: 64)
+
+    Returns:
+        (y_min, y_max, x_min, x_max): ROI bounds in output grid coordinates,
+        or None if no hits expected
+    """
+    from src.framelet_sampling import project_and_distort_jit
+
+    h, w = surface_positions.shape[:2]
+
+    # Create coarse grid by downsampling
+    coarse_positions = surface_positions[::downsample_factor, ::downsample_factor, :]
+    coarse_flat = coarse_positions.reshape(-1, 3)
+
+    # Filter out NaN positions (not on planet surface)
+    valid_surface = ~np.isnan(coarse_flat[:, 0])
+    if not np.any(valid_surface):
+        return None
+
+    valid_pos = coarse_flat[valid_surface]
+
+    # Transform to camera frame
+    rays = valid_pos - framelet.cam_position
+    rays_inst = rays @ framelet.cam_orient
+
+    # Get camera parameters
+    params = camera_params.get_params(framelet.color)
+    focal_length = params["focal_length"]
+    cx = params["cx"]
+    cy = params["cy"]
+    k1 = params["k1"]
+    k2 = params["k2"]
+
+    # Project to pixel coordinates (JIT-compiled)
+    pixel_x, pixel_y = project_and_distort_jit(
+        rays_inst, focal_length, cx, cy, k1, k2
+    )
+
+    # Check which pixels are in framelet bounds
+    framelet_h, framelet_w = framelet.data.shape
+    in_front = rays_inst[:, 2] > 0
+    in_x_bounds = (pixel_x >= 0) & (pixel_x < framelet_w - 1)
+    in_y_bounds = (pixel_y >= 0) & (pixel_y < framelet_h - 1)
+    framelet_valid = in_front & in_x_bounds & in_y_bounds
+
+    if not np.any(framelet_valid):
+        return None  # No hits at all
+
+    # Map back to coarse grid coordinates
+    coarse_h, coarse_w = coarse_positions.shape[:2]
+    hit_mask_flat = np.zeros(len(coarse_flat), dtype=bool)
+    hit_mask_flat[valid_surface] = framelet_valid
+    hit_mask = hit_mask_flat.reshape(coarse_h, coarse_w)
+
+    # Find bounding box of hits in coarse grid
+    hit_rows, hit_cols = np.where(hit_mask)
+
+    # Convert back to full resolution coordinates with generous margin
+    # Margin: 2× the downsample factor on each side
+    margin = downsample_factor * 2
+
+    y_min = max(0, hit_rows.min() * downsample_factor - margin)
+    y_max = min(h, (hit_rows.max() + 1) * downsample_factor + margin)
+    x_min = max(0, hit_cols.min() * downsample_factor - margin)
+    x_max = min(w, (hit_cols.max() + 1) * downsample_factor + margin)
+
+    return (y_min, y_max, x_min, x_max)
+
+
 def project_framelets_to_pinhole_view(
     framelets_by_color: dict,
     ellipsoid: JupiterEllipsoid,
@@ -302,9 +388,29 @@ def project_framelets_to_pinhole_view(
             ):
                 continue
 
-            # Sample framelet at surface positions using precomputed camera state
-            sampled, valid_mask, debug_info = sample_framelet_at_positions(
+            # SPATIAL CULLING: Estimate which region could hit this framelet (fast version)
+            roi = estimate_framelet_roi_fast(
                 surface_positions,
+                framelet,
+                camera_params,
+                downsample_factor=64,
+            )
+
+            if roi is None:
+                # No hits expected - skip this framelet entirely
+                if idx % 5 == 0:
+                    print(f"      Frame {framelet.frame_number:3d}: 0 valid samples (skipped via ROI culling)")
+                continue
+
+            # Extract ROI from surface positions
+            y_min, y_max, x_min, x_max = roi
+            roi_positions = surface_positions[y_min:y_max, x_min:x_max, :]
+            roi_size = roi_positions.shape[0] * roi_positions.shape[1]
+            full_size = surface_positions.shape[0] * surface_positions.shape[1]
+
+            # Sample framelet at ROI only
+            sampled_roi, valid_mask_roi, debug_info = sample_framelet_at_positions(
+                roi_positions,
                 framelet.data,
                 framelet.cam_position,
                 framelet.cam_orient,
@@ -314,12 +420,19 @@ def project_framelets_to_pinhole_view(
                 color=color_name,
             )
 
-            rgb_values[:, :, channel_idx] += sampled
-            rgb_counts[:, :, channel_idx] += valid_mask
+            # Place ROI results back into full arrays
+            rgb_values[y_min:y_max, x_min:x_max, channel_idx] += sampled_roi
+            rgb_counts[y_min:y_max, x_min:x_max, channel_idx] += valid_mask_roi
+
+            # Update variables for logging
+            sampled = sampled_roi
+            valid_mask = valid_mask_roi
 
             if idx % 5 == 0:
+                culling_pct = (1.0 - roi_size / full_size) * 100
                 print(
-                    f"      Frame {framelet.frame_number:3d}: {np.sum(valid_mask):,} valid samples"
+                    f"      Frame {framelet.frame_number:3d}: {np.sum(valid_mask):,} valid samples "
+                    f"(ROI: {roi_size:,}/{full_size:,} = {culling_pct:.1f}% culled)"
                 )
                 print(
                     f"        Validation: {debug_info['valid']}/{debug_info['total']} valid "
