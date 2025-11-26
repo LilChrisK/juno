@@ -14,16 +14,17 @@ from src.spice_correction import SpiceKernelManager, JunoCamImage
 from src.map_projection import JupiterEllipsoid
 from src.pinhole_projection import extract_framelets, project_framelets_to_pinhole_view
 from src.cylindrical_projection import CylindricalProjection
+from src.framelet_sampling import CameraParameters
 
 
-def process_pinhole(framelets_by_color, ellipsoid, reference_framelet, junocam_img):
+def process_pinhole(framelets_by_color, ellipsoid, camera_params, reference_framelet, junocam_img):
     """Process framelets to create pinhole camera view."""
     print("\n" + "=" * 70)
     print("CREATING PINHOLE VIEW")
     print("=" * 70)
 
     output_rgb, output_red, output_green, output_blue = project_framelets_to_pinhole_view(
-        framelets_by_color, ellipsoid, reference_framelet
+        framelets_by_color, ellipsoid, camera_params, reference_framelet
     )
 
     if output_rgb is not None:
@@ -55,6 +56,7 @@ def process_pinhole(framelets_by_color, ellipsoid, reference_framelet, junocam_i
 def process_cylindrical(
     framelets_by_color,
     ellipsoid,
+    camera_params,
     reference_et,
     junocam_img,
     lon_min=0.0,
@@ -102,6 +104,7 @@ def process_cylindrical(
                 framelet.cam_position,
                 framelet.cam_orient,
                 ellipsoid,
+                camera_params,
                 sun_position,
                 color_name
             )
@@ -148,9 +151,9 @@ Examples:
     parser.add_argument(
         '--image',
         type=str,
-        # default='images/raw/JNCE_2021159_34C00080_V01-raw.png',
+        default='images/raw/JNCE_2021159_34C00080_V01-raw.png',
         # default='images/raw/JNCE_2021159_34C00055_V01-raw.png',
-        default='images/raw/JNCE_2021159_34C00048_V01-raw.png',
+        # default='images/raw/JNCE_2021159_34C00048_V01-raw.png',
         # default='images/raw/JNCE_2021106_33C00052_V01-raw.png',
         help='Path to input image (default: JNCE_2021159_34C00080_V01-raw.png)'
     )
@@ -199,8 +202,12 @@ Examples:
         print("\n2. Initializing Jupiter ellipsoid...")
         ellipsoid = JupiterEllipsoid()
 
+        # Initialize camera parameters
+        print("\n3. Loading camera parameters...")
+        camera_params = CameraParameters()
+
         # Load image
-        print("\n3. Loading image metadata...")
+        print("\n4. Loading image metadata...")
         fname = Path(args.image)
         if not fname.exists():
             print(f"\n✗ Error: Image file not found: {fname}")
@@ -212,7 +219,7 @@ Examples:
         print(f"   Image time: {junocam_img.image_time}")
 
         # Get timing and apply SPICE corrections
-        print("\n4. Getting timing information...")
+        print("\n5. Getting timing information...")
         start_et = junocam_img.get_ephemeris_time()
         interframe_delay_str = junocam_img.metadata.get("INTERFRAME_DELAY", "0.371 <s>")
         interframe_delay = float(interframe_delay_str.split()[0])
@@ -228,7 +235,7 @@ Examples:
         print(f"   Interframe delay: {interframe_delay:.3f} seconds")
 
         # Extract framelets
-        print("\n5. Extracting framelets...")
+        print("\n6. Extracting framelets...")
         framelets_by_color = extract_framelets(fname, start_et, interframe_delay)
 
         # Use middle frame for reference
@@ -236,17 +243,18 @@ Examples:
         view_frame_idx = num_frames // 2
         reference_framelet = framelets_by_color["green"][view_frame_idx]
 
-        print(f"\n6. Using frame {view_frame_idx}/{num_frames} for reference")
+        print(f"\n7. Using frame {view_frame_idx}/{num_frames} for reference")
         print(f"   Reference ET: {reference_framelet.et:.2f}")
 
         # Process based on mode
         if args.mode in ['pinhole', 'both']:
-            process_pinhole(framelets_by_color, ellipsoid, reference_framelet, junocam_img)
+            process_pinhole(framelets_by_color, ellipsoid, camera_params, reference_framelet, junocam_img)
 
         if args.mode in ['cylindrical', 'both']:
             process_cylindrical(
                 framelets_by_color,
                 ellipsoid,
+                camera_params,
                 reference_framelet.et,
                 junocam_img,
                 lon_min=args.cyl_lon_range[0],

@@ -15,6 +15,7 @@ from src.spice_correction import SpiceKernelManager, JunoCamImage
 from src.map_projection import JupiterEllipsoid
 from src.pinhole_projection import extract_framelets
 from src.cylindrical_projection import CylindricalProjection
+from src.framelet_sampling import CameraParameters
 
 
 # ============================================================================
@@ -48,6 +49,7 @@ def process_single_image(
     image_path: Path,
     projection: CylindricalProjection,
     ellipsoid: JupiterEllipsoid,
+    camera_params: CameraParameters,
     sun_position: np.ndarray = None
 ):
     """
@@ -57,6 +59,7 @@ def process_single_image(
         image_path: Path to raw image file
         projection: CylindricalProjection instance to accumulate data
         ellipsoid: Jupiter ellipsoid model
+        camera_params: CameraParameters instance with intrinsic camera parameters
         sun_position: Optional pre-computed sun position (if None, will compute)
 
     Returns:
@@ -125,6 +128,7 @@ def process_single_image(
                 framelet.cam_position,
                 framelet.cam_orient,
                 ellipsoid,
+                camera_params,
                 sun_position,
                 color_name
             )
@@ -171,9 +175,15 @@ def main():
         print("=" * 70)
         ellipsoid = JupiterEllipsoid()
 
+        # Initialize camera parameters
+        print("\n" + "=" * 70)
+        print("3. Loading camera parameters...")
+        print("=" * 70)
+        camera_params = CameraParameters()
+
         # Create cylindrical projection (shared across all images)
         print("\n" + "=" * 70)
-        print("3. Creating cylindrical projection...")
+        print("4. Creating cylindrical projection...")
         print("=" * 70)
         projection = CylindricalProjection(
             lon_min=PROJECTION_CONFIG['lon_min'],
@@ -185,7 +195,7 @@ def main():
 
         # Compute surface grid (done once, reused for all images)
         print("\n" + "=" * 70)
-        print("4. Computing surface grid...")
+        print("5. Computing surface grid...")
         print("=" * 70)
         # Use current time as reference (doesn't matter since IAU_JUPITER is body-fixed)
         reference_et = spice.str2et("2021-06-09T00:00:00")
@@ -193,7 +203,7 @@ def main():
 
         # Process each image
         print("\n" + "=" * 70)
-        print("5. Processing images...")
+        print("6. Processing images...")
         print("=" * 70)
 
         processing_stats = []
@@ -201,14 +211,15 @@ def main():
             stats = process_single_image(
                 Path(image_path),
                 projection,
-                ellipsoid
+                ellipsoid,
+                camera_params
             )
             if stats:
                 processing_stats.append(stats)
 
         # Save combined projection
         print("\n" + "=" * 70)
-        print("6. Saving combined projection...")
+        print("7. Saving combined projection...")
         print("=" * 70)
         projection.save(OUTPUT_DIR, OUTPUT_NAME)
 

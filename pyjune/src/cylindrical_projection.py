@@ -173,6 +173,7 @@ class CylindricalProjection:
         framelet_cam_position: np.ndarray,
         framelet_cam_orient: np.ndarray,
         ellipsoid,
+        camera_params,
         sun_position: np.ndarray,
         color_channel: str
     ):
@@ -187,6 +188,7 @@ class CylindricalProjection:
             framelet_cam_position: Camera position in IAU_JUPITER frame (km)
             framelet_cam_orient: Camera orientation matrix (JUNO_JUNOCAM -> IAU_JUPITER)
             ellipsoid: JupiterEllipsoid instance for computing surface normals
+            camera_params: CameraParameters instance with intrinsic camera parameters
             sun_position: Sun position in IAU_JUPITER frame (km)
             color_channel: 'red', 'green', or 'blue'
         """
@@ -202,6 +204,7 @@ class CylindricalProjection:
             framelet_cam_position,
             framelet_cam_orient,
             ellipsoid,
+            camera_params,
             sun_position,
             color_channel
         )

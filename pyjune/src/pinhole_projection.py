@@ -84,7 +84,10 @@ def extract_framelets(
 
 
 def project_framelets_to_pinhole_view(
-    framelets_by_color: dict, ellipsoid: JupiterEllipsoid, reference_framelet
+    framelets_by_color: dict,
+    ellipsoid: JupiterEllipsoid,
+    camera_params,
+    reference_framelet
 ):
     """
     Create a synthetic pinhole camera view by projecting framelets onto Jupiter's surface.
@@ -93,6 +96,7 @@ def project_framelets_to_pinhole_view(
     Args:
         framelets_by_color: Dictionary of framelets by color
         ellipsoid: Jupiter ellipsoid model
+        camera_params: CameraParameters instance with intrinsic camera parameters
         reference_framelet: Framelet to use for view geometry (typically middle frame)
 
     Returns:
@@ -305,6 +309,7 @@ def project_framelets_to_pinhole_view(
                 framelet.cam_position,
                 framelet.cam_orient,
                 ellipsoid,
+                camera_params,
                 sun_position,
                 color=color_name,
             )
