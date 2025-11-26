@@ -14,6 +14,18 @@ import spiceypy as spice
 import time
 from typing import Tuple, Dict, Any
 
+# Try to import numba for JIT compilation
+try:
+    from numba import njit
+    HAS_NUMBA = True
+except ImportError:
+    HAS_NUMBA = False
+    # Fallback: no-op decorator
+    def njit(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
 
 class CameraParameters:
     """
@@ -55,6 +67,10 @@ class CameraParameters:
             }
 
         print(f"Loaded camera parameters for {len(self.params)} color bands")
+        if HAS_NUMBA:
+            print("Using Numba JIT for projection/distortion (expect 2-3× speedup)")
+        else:
+            print("Numba not available - using numpy fallback")
 
     def get_params(self, color: str) -> dict:
         """
@@ -68,6 +84,50 @@ class CameraParameters:
         """
         naif_id = self.color_to_naif.get(color.lower(), -61502)
         return self.params[naif_id]
+
+
+@njit(fastmath=True, cache=True)
+def project_and_distort_jit(rays_inst, focal_length, cx, cy, k1, k2):
+    """
+    JIT-compiled pinhole projection with radial distortion.
+
+    Applies the JunoCam distortion model:
+    1. Normalize by Z (perspective division)
+    2. Apply radial distortion (dr = 1 + k1*r^2 + k2*r^4)
+    3. Scale by focal length and add principal point
+
+    Args:
+        rays_inst: Ray directions in camera frame (N x 3)
+        focal_length: Camera focal length in pixels
+        cx, cy: Principal point coordinates
+        k1, k2: Radial distortion coefficients
+
+    Returns:
+        pixel_x, pixel_y: Projected pixel coordinates (N,)
+    """
+    n = rays_inst.shape[0]
+    pixel_x = np.empty(n, dtype=np.float64)
+    pixel_y = np.empty(n, dtype=np.float64)
+
+    for i in range(n):
+        z = rays_inst[i, 2]
+        if z != 0.0:
+            inv_z = 1.0 / z
+            cam_x = rays_inst[i, 0] * inv_z
+            cam_y = rays_inst[i, 1] * inv_z
+
+            # Apply radial distortion
+            r2 = cam_x * cam_x + cam_y * cam_y
+            dr_focal = (1.0 + k1 * r2 + k2 * r2 * r2) * focal_length
+
+            pixel_x[i] = cam_x * dr_focal + cx
+            pixel_y[i] = cam_y * dr_focal + cy
+        else:
+            # Invalid point (z=0)
+            pixel_x[i] = np.nan
+            pixel_y[i] = np.nan
+
+    return pixel_x, pixel_y
 
 
 def sample_framelet_at_positions(
@@ -233,24 +293,14 @@ def sample_framelet_at_positions(
 
     # ========== PINHOLE PROJECTION + DISTORTION ==========
     t0 = time.perf_counter()
-    # Apply distortion-corrected pinhole projection
+    # Apply distortion-corrected pinhole projection using JIT-compiled function
     # Per juno_junocam_v03.ti kernel documentation (lines 386-394):
     # 1. Normalize by Z (perspective division without focal length)
     # 2. Apply radial distortion model
     # 3. Scale by focal length and add principal point
-    with np.errstate(divide="ignore", invalid="ignore"):
-        # Optimized: compute inverse z once
-        inv_z = 1.0 / rays_inst[:, 2]
-        cam_x = rays_inst[:, 0] * inv_z
-        cam_y = rays_inst[:, 1] * inv_z
-
-        # Apply radial distortion: dr = 1 + k1*r^2 + k2*r^4
-        r2 = cam_x * cam_x + cam_y * cam_y
-        dr_focal = (1.0 + k1 * r2 + k2 * r2 * r2) * focal_length
-
-        # Apply distortion and focal length scaling in one operation
-        pixel_x = cam_x * dr_focal + cx
-        pixel_y = cam_y * dr_focal + cy
+    pixel_x, pixel_y = project_and_distort_jit(
+        rays_inst, focal_length, cx, cy, k1, k2
+    )
     timings["7_projection_distortion"] = (time.perf_counter() - t0) * 1000
 
     # ========== BOUNDS CHECKING ==========
@@ -327,14 +377,14 @@ def sample_framelet_at_positions(
 
         # ========== MAP BACK TO OUTPUT ARRAYS ==========
         t0 = time.perf_counter()
-        # Map back to full array
-        temp_values = np.zeros(len(valid_pos), dtype=np.float32)
-        temp_valid = np.zeros(len(valid_pos), dtype=np.float32)
-        temp_values[framelet_valid] = sampled
-        temp_valid[framelet_valid] = 1.0
+        # Direct mapping without temporary arrays (optimized)
+        # valid_surface tracks which flat_pos indices survived all filtering
+        # framelet_valid is a mask on the filtered set indicating which passed bounds check
+        base_indices = np.where(valid_surface)[0]
+        final_indices = base_indices[framelet_valid]
 
-        pixel_values[valid_surface] = temp_values
-        valid_mask[valid_surface] = temp_valid
+        pixel_values[final_indices] = sampled
+        valid_mask[final_indices] = 1.0
         timings["11_array_mapping"] = (time.perf_counter() - t0) * 1000
 
     # Calculate total time
