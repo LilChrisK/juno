@@ -11,6 +11,7 @@ Performance Note:
 
 import numpy as np
 import spiceypy as spice
+import time
 from typing import Tuple, Dict, Any
 
 
@@ -102,7 +103,12 @@ def sample_framelet_at_positions(
             - valid_mask: Boolean mask (1.0/0.0) of valid samples
             - debug_info: Dictionary with sampling statistics
     """
+    # ========== TIMING SETUP ==========
+    t_start = time.perf_counter()
+    timings = {}
 
+    # ========== SETUP ==========
+    t0 = time.perf_counter()
     height, width = framelet_data.shape
     output_shape = surface_positions.shape[:-1]
 
@@ -112,6 +118,7 @@ def sample_framelet_at_positions(
 
     pixel_values = np.zeros(len(flat_pos), dtype=np.float32)
     valid_mask = np.zeros(len(flat_pos), dtype=np.float32)
+    timings["1_setup"] = (time.perf_counter() - t0) * 1000  # milliseconds
 
     if not np.any(valid_surface):
         debug_info = {
@@ -133,46 +140,59 @@ def sample_framelet_at_positions(
     # Get valid positions
     valid_pos = flat_pos[valid_surface]
 
+    # ========== SURFACE NORMALS ==========
+    t0 = time.perf_counter()
     # Check visibility: surface normal must point towards camera
     # Compute surface normals (for oblate ellipsoid)
-    a_sq = ellipsoid.equatorial_radius_a ** 2
-    c_sq = ellipsoid.polar_radius ** 2
-
     # Surface normal for ellipsoid: gradient of (x/a)² + (y/a)² + (z/c)² = 1
-    normals = np.zeros_like(valid_pos)
-    normals[:, 0] = 2 * valid_pos[:, 0] / a_sq
-    normals[:, 1] = 2 * valid_pos[:, 1] / a_sq
-    normals[:, 2] = 2 * valid_pos[:, 2] / c_sq
-    # Normalize
-    normals = normals / np.linalg.norm(normals, axis=1, keepdims=True)
+    # Optimized: pre-allocate and compute in-place to reduce allocations
+    inv_a_sq = 1.0 / (ellipsoid.equatorial_radius_a ** 2)
+    inv_c_sq = 1.0 / (ellipsoid.polar_radius ** 2)
 
-    # Vector from surface to camera
-    to_camera = cam_pos - valid_pos
-    to_camera_normalized = to_camera / np.linalg.norm(to_camera, axis=1, keepdims=True)
+    # Pre-allocate normals array
+    normals = np.empty_like(valid_pos)
+    normals[:, 0] = valid_pos[:, 0] * inv_a_sq
+    normals[:, 1] = valid_pos[:, 1] * inv_a_sq
+    normals[:, 2] = valid_pos[:, 2] * inv_c_sq
 
-    # Dot product: positive means normal points towards camera (visible)
-    dot_product = np.sum(normals * to_camera_normalized, axis=1)
-    surface_visible = dot_product > 0
+    # Fast normalization: compute 1/|n| and multiply (faster than divide)
+    norm_inv = 1.0 / np.sqrt(normals[:, 0]**2 + normals[:, 1]**2 + normals[:, 2]**2)
+    normals[:, 0] *= norm_inv
+    normals[:, 1] *= norm_inv
+    normals[:, 2] *= norm_inv
+    timings["2_surface_normals"] = (time.perf_counter() - t0) * 1000
 
-    # Check illumination: surface normal must point towards Sun (dayside)
-    # Vector from surface to Sun
+    # ========== VISIBILITY & ILLUMINATION CHECK (FUSED) ==========
+    t0 = time.perf_counter()
+    # Compute camera rays (reused later for camera transform)
+    # rays points from camera to surface, to_camera points from surface to camera
+    rays = valid_pos - cam_pos
     to_sun = sun_position - valid_pos
-    to_sun_normalized = to_sun / np.linalg.norm(to_sun, axis=1, keepdims=True)
 
-    # Dot product: positive means surface is illuminated by Sun
-    sun_dot = np.sum(normals * to_sun_normalized, axis=1)
-    surface_illuminated = sun_dot > 0
+    # Optimization: Skip normalization! We only need sign of dot product.
+    # Since normals are unit vectors, sign(dot(n, v)) == sign(dot(n, v/|v|))
+    # Note: rays and to_camera point in opposite directions, so we negate
+    camera_dot = -np.einsum('ij,ij->i', normals, rays)
+    sun_dot = np.einsum('ij,ij->i', normals, to_sun)
 
-    # Combine visibility and illumination checks
-    surface_valid = surface_visible & surface_illuminated
+    # Combine visibility and illumination: both must be positive
+    surface_valid = (camera_dot > 0) & (sun_dot > 0)
 
+    timings["3_visibility_illumination_check"] = (time.perf_counter() - t0) * 1000
+
+    # ========== FILTER VALID POINTS ==========
+    t0 = time.perf_counter()
     # Filter to only visible and illuminated surface points
     valid_pos = valid_pos[surface_valid]
+    rays = rays[surface_valid]  # Also filter rays (computed earlier)
 
-    # Update valid_surface mask
-    temp_mask = np.zeros(len(flat_pos), dtype=bool)
-    temp_mask[valid_surface] = surface_valid
-    valid_surface = temp_mask
+    # Update valid_surface mask (optimized: in-place update)
+    # Get indices where valid_surface is currently True
+    idx = np.flatnonzero(valid_surface)
+    # Reset all to False and set only passing indices to True
+    valid_surface[:] = False
+    valid_surface[idx[surface_valid]] = True
+    timings["4_filter_valid"] = (time.perf_counter() - t0) * 1000
 
     if not np.any(valid_surface):
         debug_info = {
@@ -191,13 +211,17 @@ def sample_framelet_at_positions(
             debug_info,
         )
 
-    # Transform to camera frame
-    rays = valid_pos - cam_pos
+    # ========== TRANSFORM TO CAMERA FRAME ==========
+    t0 = time.perf_counter()
+    # Transform to camera frame (rays already computed and filtered above)
     # cam_orient transforms instrument->IAU_JUPITER: v_jupiter = cam_orient @ v_inst
     # So inverse is: v_inst = cam_orient.T @ v_jupiter (for column vectors)
     # For row vectors: v_inst = v_jupiter @ cam_orient (no transpose needed!)
     rays_inst = rays @ cam_orient
+    timings["5_camera_transform"] = (time.perf_counter() - t0) * 1000
 
+    # ========== GET CAMERA PARAMETERS ==========
+    t0 = time.perf_counter()
     # Get camera parameters for this color band
     params = camera_params.get_params(color)
     focal_length = params["focal_length"]
@@ -205,26 +229,32 @@ def sample_framelet_at_positions(
     cy = params["cy"]
     k1 = params["k1"]
     k2 = params["k2"]
+    timings["6_get_camera_params"] = (time.perf_counter() - t0) * 1000
 
+    # ========== PINHOLE PROJECTION + DISTORTION ==========
+    t0 = time.perf_counter()
     # Apply distortion-corrected pinhole projection
     # Per juno_junocam_v03.ti kernel documentation (lines 386-394):
     # 1. Normalize by Z (perspective division without focal length)
     # 2. Apply radial distortion model
     # 3. Scale by focal length and add principal point
     with np.errstate(divide="ignore", invalid="ignore"):
-        cam_x = rays_inst[:, 0] / rays_inst[:, 2]
-        cam_y = rays_inst[:, 1] / rays_inst[:, 2]
+        # Optimized: compute inverse z once
+        inv_z = 1.0 / rays_inst[:, 2]
+        cam_x = rays_inst[:, 0] * inv_z
+        cam_y = rays_inst[:, 1] * inv_z
 
         # Apply radial distortion: dr = 1 + k1*r^2 + k2*r^4
-        r2 = cam_x**2 + cam_y**2
-        dr = 1.0 + k1 * r2 + k2 * r2 * r2
-        cam_x_distorted = cam_x * dr
-        cam_y_distorted = cam_y * dr
+        r2 = cam_x * cam_x + cam_y * cam_y
+        dr_focal = (1.0 + k1 * r2 + k2 * r2 * r2) * focal_length
 
-        # Scale by focal length and add principal point
-        pixel_x = cam_x_distorted * focal_length + cx
-        pixel_y = cam_y_distorted * focal_length + cy
+        # Apply distortion and focal length scaling in one operation
+        pixel_x = cam_x * dr_focal + cx
+        pixel_y = cam_y * dr_focal + cy
+    timings["7_projection_distortion"] = (time.perf_counter() - t0) * 1000
 
+    # ========== BOUNDS CHECKING ==========
+    t0 = time.perf_counter()
     # Debug info
     in_front = rays_inst[:, 2] > 0
     in_x_bounds = (pixel_x >= 0) & (pixel_x < width - 1)
@@ -232,6 +262,7 @@ def sample_framelet_at_positions(
 
     # Check valid pixels
     framelet_valid = in_x_bounds & in_y_bounds & in_front
+    timings["8_bounds_checking"] = (time.perf_counter() - t0) * 1000
 
     # Debug - return info about why validation failed
     debug_info = {
@@ -250,6 +281,8 @@ def sample_framelet_at_positions(
     }
 
     if np.any(framelet_valid):
+        # ========== BILINEAR INTERPOLATION SETUP ==========
+        t0 = time.perf_counter()
         # Custom bilinear interpolation (10-30× faster than RectBivariateSpline!)
         valid_px = pixel_x[framelet_valid]
         valid_py = pixel_y[framelet_valid]
@@ -269,21 +302,31 @@ def sample_framelet_at_positions(
         # Fractional parts (interpolation weights)
         fx = valid_px - x0
         fy = valid_py - y0
+        timings["9_interp_setup"] = (time.perf_counter() - t0) * 1000
 
+        # ========== BILINEAR INTERPOLATION COMPUTE ==========
+        t0 = time.perf_counter()
         # Bilinear interpolation: weighted average of 4 corner pixels
         # f(x,y) = f00*(1-fx)*(1-fy) + f10*fx*(1-fy) + f01*(1-fx)*fy + f11*fx*fy
+        # Optimized: pre-compute common terms
+        fx_inv = 1.0 - fx
+        fy_inv = 1.0 - fy
+
         f00 = framelet_data[y0_clip, x0_clip]
         f10 = framelet_data[y0_clip, x1_clip]
         f01 = framelet_data[y1_clip, x0_clip]
         f11 = framelet_data[y1_clip, x1_clip]
 
         sampled = (
-            f00 * (1 - fx) * (1 - fy)
-            + f10 * fx * (1 - fy)
-            + f01 * (1 - fx) * fy
+            f00 * fx_inv * fy_inv
+            + f10 * fx * fy_inv
+            + f01 * fx_inv * fy
             + f11 * fx * fy
         )
+        timings["10_interp_compute"] = (time.perf_counter() - t0) * 1000
 
+        # ========== MAP BACK TO OUTPUT ARRAYS ==========
+        t0 = time.perf_counter()
         # Map back to full array
         temp_values = np.zeros(len(valid_pos), dtype=np.float32)
         temp_valid = np.zeros(len(valid_pos), dtype=np.float32)
@@ -292,6 +335,18 @@ def sample_framelet_at_positions(
 
         pixel_values[valid_surface] = temp_values
         valid_mask[valid_surface] = temp_valid
+        timings["11_array_mapping"] = (time.perf_counter() - t0) * 1000
+
+    # Calculate total time
+    total_time = (time.perf_counter() - t_start) * 1000
+
+    # Print timing breakdown
+    print(f"      [TIMING] sample_framelet_at_positions: {total_time:.3f}ms total")
+    print("        ┌─ Breakdown:")
+    for key in sorted(timings.keys()):
+        pct = (timings[key] / total_time * 100) if total_time > 0 else 0
+        print(f"        │  {key:25s}: {timings[key]:6.3f}ms ({pct:5.1f}%)")
+    print(f"        └─ Total: {total_time:.3f}ms")
 
     return (
         pixel_values.reshape(output_shape),
