@@ -178,14 +178,11 @@ def project_framelets_to_pinhole_view(
     # Transform to Jupiter frame
     rays_jupiter_sample = rays_sample @ cam_orient.T
 
-    # Test which rays hit Jupiter
-    jupiter_hits = np.zeros((sample_size, sample_size), dtype=bool)
-    for i in range(sample_size):
-        for j in range(sample_size):
-            ray_dir = rays_jupiter_sample[i, j]
-            intersection = ellipsoid.ray_intersection(cam_position, ray_dir)
-            if intersection is not None:
-                jupiter_hits[i, j] = True
+    # Test which rays hit Jupiter (vectorized)
+    print(f"   Coarse sampling: testing {sample_size}×{sample_size} = {sample_size*sample_size} rays...")
+    sample_intersections = ellipsoid.ray_intersection_vectorized(cam_position, rays_jupiter_sample)
+    jupiter_hits = ~np.isnan(sample_intersections[..., 0])
+    print(f"   Found {np.sum(jupiter_hits)} hits in coarse grid")
 
     # Find bounding box of Jupiter in detector space
     if np.any(jupiter_hits):
@@ -251,7 +248,6 @@ def project_framelets_to_pinhole_view(
 
     # Project rays onto Jupiter surface
     print("\n4. Projecting rays onto Jupiter surface...")
-    surface_positions = np.full((view_size, view_size, 3), np.nan, dtype=np.float32)
 
     # Debug: test center pixel
     center_idx = view_size // 2
@@ -262,16 +258,11 @@ def project_framelets_to_pinhole_view(
     center_hit = ellipsoid.ray_intersection(cam_position, center_ray)
     print(f"   Center hit Jupiter: {center_hit is not None}")
 
-    hit_count = 0
-    for i in range(view_size):
-        if i % 100 == 0:
-            print(f"   Row {i}/{view_size}... ({hit_count} hits so far)")
-        for j in range(view_size):
-            ray_dir = rays_jupiter[i, j]
-            intersection = ellipsoid.ray_intersection(cam_position, ray_dir)
-            if intersection is not None:
-                surface_positions[i, j] = intersection
-                hit_count += 1
+    # VECTORIZED ray tracing - process all rays at once!
+    print(f"   Vectorized ray tracing for {view_size:,}×{view_size:,} = {view_size*view_size:,} rays...")
+    surface_positions = ellipsoid.ray_intersection_vectorized(cam_position, rays_jupiter)
+
+    hit_count = np.sum(~np.isnan(surface_positions[..., 0]))
 
     valid_surface = ~np.isnan(surface_positions[..., 0])
     print(

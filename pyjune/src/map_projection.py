@@ -99,3 +99,74 @@ class JupiterEllipsoid:
         # Calculate intersection point
         intersection = o + t * d
         return intersection
+
+    def ray_intersection_vectorized(
+        self,
+        ray_origin: np.ndarray,
+        ray_directions: np.ndarray
+    ) -> np.ndarray:
+        """
+        Find intersections of multiple rays with ellipsoid (vectorized).
+
+        This is the high-performance version that processes all rays at once
+        using NumPy broadcasting. Can be 50-200× faster than looping over
+        ray_intersection() for large ray batches.
+
+        Solves the equation for rays P(t) = origin + t * direction intersecting
+        the ellipsoid: (x/a)² + (y/b)² + (z/c)² = 1
+
+        Args:
+            ray_origin: Ray starting point (3D vector in J2000, km)
+            ray_directions: Ray directions, shape (..., 3)
+                           Can be (H, W, 3) for image rays or (N, 3) for point list
+
+        Returns:
+            Intersection points with same shape as ray_directions
+            Uses NaN for rays that don't intersect the ellipsoid
+        """
+        # Store original shape and flatten to (N, 3) for processing
+        original_shape = ray_directions.shape
+        rays_flat = ray_directions.reshape(-1, 3)
+        N = rays_flat.shape[0]
+
+        # Normalize all directions at once
+        # Shape: (N, 3)
+        norms = np.linalg.norm(rays_flat, axis=1, keepdims=True)
+        d = rays_flat / norms
+
+        # Ray origin (broadcast to all rays)
+        o = ray_origin  # Shape: (3,)
+
+        # Ellipsoid radii
+        a, b, c = self.equatorial_radius_a, self.equatorial_radius_b, self.polar_radius
+
+        # Quadratic coefficients for: At² + Bt + C = 0
+        # Substitute ray equation into ellipsoid equation
+        # All operations vectorized across N rays
+        A = (d[:, 0]/a)**2 + (d[:, 1]/b)**2 + (d[:, 2]/c)**2  # Shape: (N,)
+        B = 2 * ((o[0]*d[:, 0])/a**2 + (o[1]*d[:, 1])/b**2 + (o[2]*d[:, 2])/c**2)  # Shape: (N,)
+        C = (o[0]/a)**2 + (o[1]/b)**2 + (o[2]/c)**2 - 1  # Scalar, broadcasts
+
+        # Discriminant
+        discriminant = B**2 - 4*A*C  # Shape: (N,)
+
+        # Two solutions
+        sqrt_disc = np.sqrt(np.maximum(discriminant, 0))  # Clamp negative to 0
+        t1 = (-B - sqrt_disc) / (2*A)  # Shape: (N,)
+        t2 = (-B + sqrt_disc) / (2*A)  # Shape: (N,)
+
+        # Want the first positive intersection (closest to ray origin)
+        # Use vectorized conditional logic
+        t = np.where(t1 > 0, t1, t2)  # If t1 > 0 use t1, else use t2
+
+        # Mark invalid intersections as NaN
+        # Invalid if: discriminant < 0 OR both t1 and t2 <= 0
+        invalid = (discriminant < 0) | ((t1 <= 0) & (t2 <= 0))
+        t[invalid] = np.nan
+
+        # Calculate intersection points for all rays
+        # Broadcasting: o (3,) + t[:, None] (N, 1) * d (N, 3) = (N, 3)
+        intersections = o + t[:, np.newaxis] * d  # Shape: (N, 3)
+
+        # Reshape back to original shape
+        return intersections.reshape(original_shape)
