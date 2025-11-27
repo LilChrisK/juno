@@ -17,10 +17,10 @@ import cv2
 import json
 from pathlib import Path
 from typing import Tuple
-from framelet_sampling import sample_framelet_at_positions
+from .framelet_sampling import sample_framelet_at_positions
 
-from src.map_projection import JupiterEllipsoid
-from src.coordinates import latlon_to_body_fixed, normalize_longitude
+from .map_projection import JupiterEllipsoid
+from .coordinates import latlon_to_body_fixed, normalize_longitude
 
 
 class CylindricalProjection:

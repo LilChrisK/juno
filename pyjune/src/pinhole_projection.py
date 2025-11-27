@@ -10,8 +10,8 @@ import sys
 import spiceypy as spice
 from dataclasses import dataclass
 
-from src.map_projection import JupiterEllipsoid
-from src.framelet_sampling import sample_framelet_at_positions
+from .framelet_sampling import project_and_distort_jit, sample_framelet_at_positions
+from .map_projection import JupiterEllipsoid
 
 
 @dataclass
@@ -106,7 +106,6 @@ def estimate_framelet_roi_fast(
         (y_min, y_max, x_min, x_max): ROI bounds in output grid coordinates,
         or None if no hits expected
     """
-    from src.framelet_sampling import project_and_distort_jit
 
     h, w = surface_positions.shape[:2]
 
