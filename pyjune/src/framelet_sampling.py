@@ -130,6 +130,140 @@ def project_and_distort_jit(rays_inst, focal_length, cx, cy, k1, k2):
     return pixel_x, pixel_y
 
 
+@njit(fastmath=True, cache=True)
+def process_visibility_and_transform_jit(
+    valid_pos, cam_pos, cam_orient, sun_position, inv_a_sq, inv_c_sq
+):
+    """
+    JIT-compiled hot path: surface normals + visibility + camera transform.
+
+    Combines three expensive operations into one tight loop:
+    1. Compute surface normals (ellipsoid geometry)
+    2. Check visibility (camera-facing) and illumination (sun-lit)
+    3. Transform rays to camera frame
+
+    Args:
+        valid_pos: Surface positions (N x 3)
+        cam_pos: Camera position (3,)
+        cam_orient: Camera orientation matrix (3 x 3)
+        sun_position: Sun position (3,)
+        inv_a_sq: 1 / (equatorial_radius^2)
+        inv_c_sq: 1 / (polar_radius^2)
+
+    Returns:
+        rays_inst: Rays in camera frame (M x 3) for visible/illuminated points
+        surface_valid: Boolean mask (N,) of which points passed checks
+    """
+    n = valid_pos.shape[0]
+    surface_valid = np.zeros(n, dtype=np.bool_)
+    rays_inst_list = []
+
+    for i in range(n):
+        # Compute surface normal for ellipsoid
+        nx = valid_pos[i, 0] * inv_a_sq
+        ny = valid_pos[i, 1] * inv_a_sq
+        nz = valid_pos[i, 2] * inv_c_sq
+
+        # Normalize
+        norm = np.sqrt(nx * nx + ny * ny + nz * nz)
+        nx /= norm
+        ny /= norm
+        nz /= norm
+
+        # Compute rays
+        ray_x = valid_pos[i, 0] - cam_pos[0]
+        ray_y = valid_pos[i, 1] - cam_pos[1]
+        ray_z = valid_pos[i, 2] - cam_pos[2]
+
+        to_sun_x = sun_position[0] - valid_pos[i, 0]
+        to_sun_y = sun_position[1] - valid_pos[i, 1]
+        to_sun_z = sun_position[2] - valid_pos[i, 2]
+
+        # Visibility check: normal points toward camera
+        camera_dot = -(nx * ray_x + ny * ray_y + nz * ray_z)
+
+        # Illumination check: normal points toward sun
+        sun_dot = nx * to_sun_x + ny * to_sun_y + nz * to_sun_z
+
+        # Both must be positive
+        if camera_dot > 0 and sun_dot > 0:
+            surface_valid[i] = True
+
+            # Transform ray to camera frame: ray_inst = ray @ cam_orient
+            rx = ray_x * cam_orient[0, 0] + ray_y * cam_orient[1, 0] + ray_z * cam_orient[2, 0]
+            ry = ray_x * cam_orient[0, 1] + ray_y * cam_orient[1, 1] + ray_z * cam_orient[2, 1]
+            rz = ray_x * cam_orient[0, 2] + ray_y * cam_orient[1, 2] + ray_z * cam_orient[2, 2]
+
+            rays_inst_list.append((rx, ry, rz))
+
+    # Convert list to array
+    m = len(rays_inst_list)
+    rays_inst = np.empty((m, 3), dtype=np.float64)
+    for i in range(m):
+        rays_inst[i, 0] = rays_inst_list[i][0]
+        rays_inst[i, 1] = rays_inst_list[i][1]
+        rays_inst[i, 2] = rays_inst_list[i][2]
+
+    return rays_inst, surface_valid
+
+
+@njit(fastmath=True, cache=True)
+def bilinear_interp_jit(pixel_x, pixel_y, framelet_data, width, height):
+    """
+    JIT-compiled bilinear interpolation.
+
+    Combines setup and computation into one tight loop for speed.
+
+    Args:
+        pixel_x: X coordinates (N,)
+        pixel_y: Y coordinates (N,)
+        framelet_data: Image data (height x width)
+        width: Image width
+        height: Image height
+
+    Returns:
+        sampled: Interpolated values (N,)
+    """
+    n = pixel_x.shape[0]
+    sampled = np.empty(n, dtype=np.float64)
+
+    for i in range(n):
+        px = pixel_x[i]
+        py = pixel_y[i]
+
+        # Extract integer and fractional parts
+        x0 = int(np.floor(px))
+        y0 = int(np.floor(py))
+        fx = px - x0
+        fy = py - y0
+
+        # Clip to bounds
+        x0_clip = max(0, min(x0, width - 1))
+        x1_clip = max(0, min(x0 + 1, width - 1))
+        y0_clip = max(0, min(y0, height - 1))
+        y1_clip = max(0, min(y0 + 1, height - 1))
+
+        # Bilinear interpolation weights
+        fx_inv = 1.0 - fx
+        fy_inv = 1.0 - fy
+
+        # Sample 4 corners
+        f00 = framelet_data[y0_clip, x0_clip]
+        f10 = framelet_data[y0_clip, x1_clip]
+        f01 = framelet_data[y1_clip, x0_clip]
+        f11 = framelet_data[y1_clip, x1_clip]
+
+        # Weighted average
+        sampled[i] = (
+            f00 * fx_inv * fy_inv
+            + f10 * fx * fy_inv
+            + f01 * fx_inv * fy
+            + f11 * fx * fy
+        )
+
+    return sampled
+
+
 def sample_framelet_at_positions(
     surface_positions: np.ndarray,
     framelet_data: np.ndarray,
@@ -205,59 +339,27 @@ def sample_framelet_at_positions(
     # Get valid positions
     valid_pos = flat_pos[valid_surface]
 
-    # ========== SURFACE NORMALS ==========
+    # ========== JIT-COMPILED HOT PATH: NORMALS + VISIBILITY + TRANSFORM ==========
     t0 = time.perf_counter()
-    # Check visibility: surface normal must point towards camera
-    # Compute surface normals (for oblate ellipsoid)
-    # Surface normal for ellipsoid: gradient of (x/a)² + (y/a)² + (z/c)² = 1
-    # Optimized: pre-allocate and compute in-place to reduce allocations
+    # Compute ellipsoid parameters once
     inv_a_sq = 1.0 / (ellipsoid.equatorial_radius_a ** 2)
     inv_c_sq = 1.0 / (ellipsoid.polar_radius ** 2)
 
-    # Pre-allocate normals array
-    normals = np.empty_like(valid_pos)
-    normals[:, 0] = valid_pos[:, 0] * inv_a_sq
-    normals[:, 1] = valid_pos[:, 1] * inv_a_sq
-    normals[:, 2] = valid_pos[:, 2] * inv_c_sq
+    # Call JIT function that combines:
+    # 1. Surface normals computation
+    # 2. Visibility check (camera-facing)
+    # 3. Illumination check (sun-lit)
+    # 4. Camera frame transformation
+    rays_inst, surface_valid_filtered = process_visibility_and_transform_jit(
+        valid_pos, cam_pos, cam_orient, sun_position, inv_a_sq, inv_c_sq
+    )
 
-    # Fast normalization: compute 1/|n| and multiply (faster than divide)
-    norm_inv = 1.0 / np.sqrt(normals[:, 0]**2 + normals[:, 1]**2 + normals[:, 2]**2)
-    normals[:, 0] *= norm_inv
-    normals[:, 1] *= norm_inv
-    normals[:, 2] *= norm_inv
-    timings["2_surface_normals"] = (time.perf_counter() - t0) * 1000
-
-    # ========== VISIBILITY & ILLUMINATION CHECK (FUSED) ==========
-    t0 = time.perf_counter()
-    # Compute camera rays (reused later for camera transform)
-    # rays points from camera to surface, to_camera points from surface to camera
-    rays = valid_pos - cam_pos
-    to_sun = sun_position - valid_pos
-
-    # Optimization: Skip normalization! We only need sign of dot product.
-    # Since normals are unit vectors, sign(dot(n, v)) == sign(dot(n, v/|v|))
-    # Note: rays and to_camera point in opposite directions, so we negate
-    camera_dot = -np.einsum('ij,ij->i', normals, rays)
-    sun_dot = np.einsum('ij,ij->i', normals, to_sun)
-
-    # Combine visibility and illumination: both must be positive
-    surface_valid = (camera_dot > 0) & (sun_dot > 0)
-
-    timings["3_visibility_illumination_check"] = (time.perf_counter() - t0) * 1000
-
-    # ========== FILTER VALID POINTS ==========
-    t0 = time.perf_counter()
-    # Filter to only visible and illuminated surface points
-    valid_pos = valid_pos[surface_valid]
-    rays = rays[surface_valid]  # Also filter rays (computed earlier)
-
-    # Update valid_surface mask (optimized: in-place update)
-    # Get indices where valid_surface is currently True
+    # Update valid_surface mask to reflect filtered points
     idx = np.flatnonzero(valid_surface)
-    # Reset all to False and set only passing indices to True
     valid_surface[:] = False
-    valid_surface[idx[surface_valid]] = True
-    timings["4_filter_valid"] = (time.perf_counter() - t0) * 1000
+    valid_surface[idx[surface_valid_filtered]] = True
+
+    timings["2_jit_hot_path"] = (time.perf_counter() - t0) * 1000
 
     if not np.any(valid_surface):
         debug_info = {
@@ -275,15 +377,6 @@ def sample_framelet_at_positions(
             valid_mask.reshape(output_shape),
             debug_info,
         )
-
-    # ========== TRANSFORM TO CAMERA FRAME ==========
-    t0 = time.perf_counter()
-    # Transform to camera frame (rays already computed and filtered above)
-    # cam_orient transforms instrument->IAU_JUPITER: v_jupiter = cam_orient @ v_inst
-    # So inverse is: v_inst = cam_orient.T @ v_jupiter (for column vectors)
-    # For row vectors: v_inst = v_jupiter @ cam_orient (no transpose needed!)
-    rays_inst = rays @ cam_orient
-    timings["5_camera_transform"] = (time.perf_counter() - t0) * 1000
 
     # ========== GET CAMERA PARAMETERS ==========
     t0 = time.perf_counter()
@@ -341,49 +434,15 @@ def sample_framelet_at_positions(
 
 
     if np.any(framelet_valid):
-        # ========== BILINEAR INTERPOLATION SETUP ==========
+        # ========== JIT-COMPILED BILINEAR INTERPOLATION ==========
         t0 = time.perf_counter()
-        # Custom bilinear interpolation (10-30× faster than RectBivariateSpline!)
+        # Extract valid coordinates
         valid_px = pixel_x[framelet_valid]
         valid_py = pixel_y[framelet_valid]
 
-        # Extract integer and fractional parts
-        x0 = np.floor(valid_px).astype(int)
-        y0 = np.floor(valid_py).astype(int)
-        x1 = x0 + 1
-        y1 = y0 + 1
-
-        # Clip to image bounds
-        x0_clip = np.clip(x0, 0, width - 1)
-        x1_clip = np.clip(x1, 0, width - 1)
-        y0_clip = np.clip(y0, 0, height - 1)
-        y1_clip = np.clip(y1, 0, height - 1)
-
-        # Fractional parts (interpolation weights)
-        fx = valid_px - x0
-        fy = valid_py - y0
-        timings["9_interp_setup"] = (time.perf_counter() - t0) * 1000
-
-        # ========== BILINEAR INTERPOLATION COMPUTE ==========
-        t0 = time.perf_counter()
-        # Bilinear interpolation: weighted average of 4 corner pixels
-        # f(x,y) = f00*(1-fx)*(1-fy) + f10*fx*(1-fy) + f01*(1-fx)*fy + f11*fx*fy
-        # Optimized: pre-compute common terms
-        fx_inv = 1.0 - fx
-        fy_inv = 1.0 - fy
-
-        f00 = framelet_data[y0_clip, x0_clip]
-        f10 = framelet_data[y0_clip, x1_clip]
-        f01 = framelet_data[y1_clip, x0_clip]
-        f11 = framelet_data[y1_clip, x1_clip]
-
-        sampled = (
-            f00 * fx_inv * fy_inv
-            + f10 * fx * fy_inv
-            + f01 * fx_inv * fy
-            + f11 * fx * fy
-        )
-        timings["10_interp_compute"] = (time.perf_counter() - t0) * 1000
+        # Call JIT-compiled interpolation (combines setup + compute)
+        sampled = bilinear_interp_jit(valid_px, valid_py, framelet_data, width, height)
+        timings["9_jit_interpolation"] = (time.perf_counter() - t0) * 1000
 
         # ========== MAP BACK TO OUTPUT ARRAYS ==========
         t0 = time.perf_counter()
