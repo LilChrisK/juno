@@ -15,12 +15,14 @@ Projection characteristics:
 import numpy as np
 import cv2
 import json
+import time
 from pathlib import Path
 from typing import Tuple
 from .framelet_sampling import sample_framelet_at_positions
+from .pinhole_projection import estimate_framelet_roi_fast
 
 from .map_projection import JupiterEllipsoid
-from .coordinates import latlon_to_body_fixed, normalize_longitude
+from .coordinates import latlon_to_body_fixed, latlon_to_body_fixed_vectorized, normalize_longitude
 
 
 class CylindricalProjection:
@@ -81,6 +83,10 @@ class CylindricalProjection:
         self.surface_grid = None
         self.reference_et = None
 
+        # Timing statistics for add_framelet calls
+        self.framelet_timings = []
+        self.framelet_count = 0
+
         print(f"Cylindrical projection initialized:")
         print(f"  Longitude range: {self.lon_min:.1f}° to {self.lon_max:.1f}° West")
         print(f"  Latitude range: {self.lat_min:.1f}° to {self.lat_max:.1f}°")
@@ -134,7 +140,7 @@ class CylindricalProjection:
         self, ellipsoid: JupiterEllipsoid, et: float
     ) -> np.ndarray:
         """
-        Pre-compute 3D surface positions for all map pixels.
+        Pre-compute 3D surface positions for all map pixels using vectorized operations.
 
         Creates a height × width × 3 array where each pixel corresponds
         to a point on Jupiter's surface in IAU_JUPITER (body-fixed) coordinates.
@@ -148,25 +154,34 @@ class CylindricalProjection:
             Surface positions array (height, width, 3) in IAU_JUPITER frame
         """
         print(f"\nComputing surface grid ({self.height} x {self.width})...")
+        t_start = time.perf_counter()
 
         self.reference_et = et
-        surface_positions = np.zeros((self.height, self.width, 3), dtype=np.float32)
+        total_pixels = self.height * self.width
 
-        # Generate lat/lon grid
-        for i in range(self.height):
-            if i % 100 == 0:
-                print(f"  Row {i}/{self.height}...")
+        # Create pixel coordinate grids (vectorized)
+        j_grid, i_grid = np.meshgrid(np.arange(self.width), np.arange(self.height))
 
-            for j in range(self.width):
-                lat, lon = self.pixel_to_latlon(j, i)
+        # Convert all pixels to lat/lon at once (vectorized)
+        lon_grid = self.lon_min + j_grid * self.resolution_deg
+        lat_grid = self.lat_max - i_grid * self.resolution_deg  # Flip y-axis
 
-                # Convert to body-fixed Cartesian (IAU_JUPITER frame, altitude = 0)
-                # Using body-fixed frame so surface positions are constant
-                pos_body_fixed = latlon_to_body_fixed(lat, lon, 0.0, ellipsoid)
-                surface_positions[i, j] = pos_body_fixed
+        # Normalize longitude and clip latitude
+        lon_grid = np.fmod(lon_grid, 360.0)
+        lon_grid = np.where(lon_grid < 0, lon_grid + 360.0, lon_grid)
+        lat_grid = np.clip(lat_grid, -90.0, 90.0)
+
+        # Convert to body-fixed Cartesian (vectorized - single call for all points!)
+        surface_positions = latlon_to_body_fixed_vectorized(
+            lat_grid, lon_grid, 0.0, ellipsoid
+        ).astype(np.float32)
 
         self.surface_grid = surface_positions
-        print(f"  Surface grid complete: {self.height * self.width:,} points")
+
+        # Print timing summary
+        total_time = (time.perf_counter() - t_start) * 1000
+        print(f"  Surface grid complete: {total_pixels:,} points in {total_time:.1f}ms ({total_time/1000:.2f}s)")
+        print(f"  Performance: {total_pixels / (total_time / 1000):,.0f} pixels/sec")
 
         return surface_positions
 
@@ -181,10 +196,10 @@ class CylindricalProjection:
         color_channel: str,
     ):
         """
-        Add framelet data to the map using backward sampling.
+        Add framelet data to the map using backward sampling with ROI culling.
 
-        Simply overwrites with the last observed sample to avoid averaging
-        artifacts from overlapping framelets.
+        Only samples the region of interest (ROI) where the framelet could possibly
+        project, significantly reducing computation time.
 
         Args:
             framelet_data: Framelet image data (height x width)
@@ -195,15 +210,51 @@ class CylindricalProjection:
             sun_position: Sun position in IAU_JUPITER frame (km)
             color_channel: 'red', 'green', or 'blue'
         """
+        t_start = time.perf_counter()
 
         if self.surface_grid is None:
             raise RuntimeError(
                 "Surface grid not computed. Call compute_surface_grid() first."
             )
 
-        # Sample framelet at all grid positions
-        pixel_values, valid_mask, debug_info = sample_framelet_at_positions(
+        # Estimate which region of the map this framelet could possibly cover
+        from types import SimpleNamespace
+        framelet_for_roi = SimpleNamespace(
+            cam_position=framelet_cam_position,
+            cam_orient=framelet_cam_orient,
+            color=color_channel,
+            data=framelet_data
+        )
+
+        roi = estimate_framelet_roi_fast(
             self.surface_grid,
+            framelet_for_roi,
+            camera_params,
+            downsample_factor=64,
+        )
+
+        if roi is None:
+            # No hits expected - skip this framelet entirely
+            self.framelet_timings.append((time.perf_counter() - t_start) * 1000)
+            self.framelet_count += 1
+            return {
+                "total": 0,
+                "in_front": 0,
+                "in_x": 0,
+                "in_y": 0,
+                "valid": 0,
+                "pixel_x_range": (0, 0),
+                "pixel_y_range": (0, 0),
+                "framelet_size": framelet_data.shape,
+            }
+
+        # Extract ROI from surface grid
+        y_min, y_max, x_min, x_max = roi
+        roi_positions = self.surface_grid[y_min:y_max, x_min:x_max, :]
+
+        # Sample framelet at ROI positions only
+        pixel_values_roi, valid_mask_roi, debug_info = sample_framelet_at_positions(
+            roi_positions,
             framelet_data,
             framelet_cam_position,
             framelet_cam_orient,
@@ -213,18 +264,26 @@ class CylindricalProjection:
             color_channel,
         )
 
-        # Simply overwrite with new values (last sample wins)
-        valid_pixels = valid_mask > 0
+        # Update only the ROI region with new values (last sample wins)
+        valid_pixels_roi = valid_mask_roi > 0
+        num_valid_pixels = np.sum(valid_pixels_roi)
+
+        roi_slice_y = slice(y_min, y_max)
+        roi_slice_x = slice(x_min, x_max)
 
         if color_channel == "red":
-            self.map_red[valid_pixels] = pixel_values[valid_pixels]
+            self.map_red[roi_slice_y, roi_slice_x][valid_pixels_roi] = pixel_values_roi[valid_pixels_roi]
         elif color_channel == "green":
-            self.map_green[valid_pixels] = pixel_values[valid_pixels]
+            self.map_green[roi_slice_y, roi_slice_x][valid_pixels_roi] = pixel_values_roi[valid_pixels_roi]
         elif color_channel == "blue":
-            self.map_blue[valid_pixels] = pixel_values[valid_pixels]
+            self.map_blue[roi_slice_y, roi_slice_x][valid_pixels_roi] = pixel_values_roi[valid_pixels_roi]
 
         # Track coverage for statistics
-        self.map_counts[valid_pixels] += 1
+        self.map_counts[roi_slice_y, roi_slice_x][valid_pixels_roi] += 1
+
+        # Store timing
+        self.framelet_timings.append((time.perf_counter() - t_start) * 1000)
+        self.framelet_count += 1
 
         return debug_info
 
@@ -238,6 +297,30 @@ class CylindricalProjection:
         # Return maps directly - no averaging since we kept only the best sample
         return self.map_red, self.map_green, self.map_blue
 
+    def print_timing_summary(self):
+        """Print summary statistics for framelet processing times."""
+        if not self.framelet_timings:
+            return
+
+        timings_array = np.array(self.framelet_timings)
+        total_time = np.sum(timings_array)
+        mean_time = np.mean(timings_array)
+        min_time = np.min(timings_array)
+        max_time = np.max(timings_array)
+        median_time = np.median(timings_array)
+
+        print("\n" + "=" * 70)
+        print("FRAMELET PROCESSING TIMING SUMMARY")
+        print("=" * 70)
+        print(f"Total framelets processed: {self.framelet_count}")
+        print(f"Total time (framelets only): {total_time:.1f}ms ({total_time/1000:.1f}s)")
+        print(f"Mean time per framelet: {mean_time:.1f}ms")
+        print(f"Median time per framelet: {median_time:.1f}ms")
+        print(f"Min time per framelet: {min_time:.1f}ms")
+        print(f"Max time per framelet: {max_time:.1f}ms")
+        print(f"Throughput: {self.framelet_count / (total_time / 1000):.2f} framelets/sec")
+        print("=" * 70)
+
     def save(self, output_dir: Path, product_id: str):
         """
         Save projection to disk as PNG images + JSON metadata.
@@ -248,6 +331,9 @@ class CylindricalProjection:
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Print timing summary before saving
+        self.print_timing_summary()
 
         # Get final maps
         red, green, blue = self.get_maps()

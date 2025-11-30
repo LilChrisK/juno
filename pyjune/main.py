@@ -99,7 +99,7 @@ def process_cylindrical(
             if framelet.frame_number == 0 or framelet.frame_number >= len(framelets) - 1:
                 continue
 
-            debug_info = projection.add_framelet(
+            projection.add_framelet(
                 framelet.data,
                 framelet.cam_position,
                 framelet.cam_orient,
@@ -108,9 +108,6 @@ def process_cylindrical(
                 sun_position,
                 color_name
             )
-
-            if idx % 5 == 0:
-                print(f"  Frame {framelet.frame_number:3d}: {debug_info['valid']:,} valid samples")
 
     # Save projection
     output_dir = Path("images/processed/cylindrical")
