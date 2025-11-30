@@ -434,14 +434,21 @@ def sample_framelet_at_positions(
 
 
     if np.any(framelet_valid):
-        # ========== JIT-COMPILED BILINEAR INTERPOLATION ==========
+        # ========== INTERPOLATION COMMENTED OUT ==========
+        # Using nearest-neighbor instead of bilinear interpolation
         t0 = time.perf_counter()
         # Extract valid coordinates
         valid_px = pixel_x[framelet_valid]
         valid_py = pixel_y[framelet_valid]
 
-        # Call JIT-compiled interpolation (combines setup + compute)
-        sampled = bilinear_interp_jit(valid_px, valid_py, framelet_data, width, height)
+        # # ORIGINAL: Bilinear interpolation (smooth blending between 4 pixels)
+        # sampled = bilinear_interp_jit(valid_px, valid_py, framelet_data, width, height)
+
+        # NO INTERPOLATION: Just round to nearest pixel and sample that exact value
+        px_int = np.clip(np.round(valid_px).astype(int), 0, width - 1)
+        py_int = np.clip(np.round(valid_py).astype(int), 0, height - 1)
+        sampled = framelet_data[py_int, px_int].astype(np.float64)
+
         timings["9_jit_interpolation"] = (time.perf_counter() - t0) * 1000
 
         # ========== MAP BACK TO OUTPUT ARRAYS ==========
@@ -460,12 +467,12 @@ def sample_framelet_at_positions(
     total_time = (time.perf_counter() - t_start) * 1000
 
     # Print timing breakdown
-    print(f"      [TIMING] sample_framelet_at_positions: {total_time:.3f}ms total")
-    print("        ┌─ Breakdown:")
-    for key in sorted(timings.keys()):
-        pct = (timings[key] / total_time * 100) if total_time > 0 else 0
-        print(f"        │  {key:25s}: {timings[key]:6.3f}ms ({pct:5.1f}%)")
-    print(f"        └─ Total: {total_time:.3f}ms")
+    # print(f"      [TIMING] sample_framelet_at_positions: {total_time:.3f}ms total")
+    # print("        ┌─ Breakdown:")
+    # for key in sorted(timings.keys()):
+    #     pct = (timings[key] / total_time * 100) if total_time > 0 else 0
+    #     print(f"        │  {key:25s}: {timings[key]:6.3f}ms ({pct:5.1f}%)")
+    # print(f"        └─ Total: {total_time:.3f}ms")
 
     return (
         pixel_values.reshape(output_shape),
